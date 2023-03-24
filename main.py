@@ -4,14 +4,14 @@ from getpak.commons import Utils as u
 
 
 def main():
-    '''
-    GET-pak entrypoint
-    '''
+    # ,-------------,
+    # | ENTRY POINT |
+    # '-------------'
     print('''
         _..._
       .'     '.      _
      /    .-""-\   _/ \ 
-   .-|   /:.   |  | l | 
+   .-|   /:.   |  |   | 
    |  \  |:.   /.-'-./ 
    | .-'-;:__.'    =/  ,ad8888ba,   88888888888  888888888888                                88
    .'=  *=|CNES _.='  d8"'    `"8b  88                88                                     88
@@ -25,8 +25,7 @@ def main():
          \   `\  \                                                  88
           `-._/._/
                     ''')
-
-    time.sleep(2) # Sleep for n seconds
+    
     pass
 
 
@@ -49,3 +48,6 @@ if __name__ == '__main__':
     final_msg_2 = f'Elapsed execution time: {t_hour}h : {t_min}m : {t_sec}s'
     print(final_msg_1)
     print(final_msg_2)
+    # ,-----,
+    # | END |
+    # '-----'
