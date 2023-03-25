@@ -5,15 +5,14 @@ import json
 import logging
 import zipfile
 import subprocess
-from osgeo import ogr, osr
 import numpy as np
 from pathlib import Path
 from PIL import Image
 
 try:
-    from osgeo import gdal
+    from osgeo import gdal, ogr, osr
 except:
-    print("Unable to import osgeo.gdal! SEN3R can still operate but some critical functions may fail.")
+    print("Unable to import osgeo! GETpak can still operate but critical functions may fail.")
 
 
 class Utils:
@@ -730,4 +729,5 @@ class Footprinter:
 
         # This will only run if no geometry from the ROI touched the S3 footprint.
         return False
+
 

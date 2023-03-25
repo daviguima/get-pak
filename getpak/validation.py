@@ -6,6 +6,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.metrics import mean_squared_log_error
 from sklearn.metrics import mean_absolute_percentage_error
 
+
 class Validation:
     
     def __init__(self, parent_log=None):
