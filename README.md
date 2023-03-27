@@ -1,6 +1,5 @@
 ## GET-pak
-### Processing and Analysis Workbench
-
+### **G**éosciences **E**nvironnement **T**oulouse - **P**rocessing and **a**nalysis Wor**k**bench
             _..._
           .'     '.      _
          /    .-""-\   _/ \ 
@@ -17,7 +16,6 @@
              /-._/-._/                                            88
              \   `\  \                                            88
               `-._/._/
-
 ### 
 ---
 This package provides tools for Sentinel-2, Sentinel-3, GeoTIFF, NetCDF and vector manipulation and validation.
