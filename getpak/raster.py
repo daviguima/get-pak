@@ -1,10 +1,12 @@
 import os
 import json
+import fiona
 import rasterio
 import pkg_resources
 
 from osgeo import gdal
 from datetime import datetime
+from rasterstats import zonal_stats
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 
 
@@ -110,6 +112,26 @@ class Raster:
         print(f'Done: {out_raster}')
         pass
     
+    @staticmethod
+    def shp_stats(tif_file, shp_poly):
+        '''
+        Given a single-band GeoTIFF file and a vector.shp return statistics inside the polygon.
+        
+        Parameters
+        ----------
+        @param tif_file: path to raster.tif file.
+        @param shp_poly: path to the polygon.shp file.
+                
+        @return: roi_stats (dict) containing the extracted statistics inside the region of interest.
+        '''
+        with fiona.open(shp_poly) as src:
+            roi_stats = zonal_stats(src, tif_file,
+                        stats="count min mean max median std",
+                        raster_out=True,
+                        band=1)
+        return roi_stats
+    
+
 class GRS:
     '''
     Core functionalities to handle GRS files
@@ -181,3 +203,6 @@ class GRS:
         metadata['grs_ver'] = ver
 
         return metadata
+    
+    
+    

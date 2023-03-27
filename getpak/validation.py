@@ -13,7 +13,7 @@ class Validation:
             if parent_log:
                 self.log = parent_log
 
-    @property
+    @staticmethod
     def r2(y_true, y_pred): #1
         return r2_score(y_true, y_pred)
 
