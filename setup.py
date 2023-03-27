@@ -28,5 +28,7 @@ setup(
         'matplotlib',
         'numpy',
         'pandas'
+        'rasterstats',
+        'fiona'
         ]
     )

@@ -60,10 +60,7 @@ class Raster:
         outdata.SetGeoTransform(transform)
         # Write projection information
         outdata.SetProjection(projection)
-
-        # Closing the files
-        # https://gdal.org/tutorials/raster_api_tut.html#using-create
-        data = None
+        # Close the file https://gdal.org/tutorials/raster_api_tut.html#using-create
         outdata = None
         pass
     
@@ -166,7 +163,7 @@ class GRS:
         
         S2A : (MMM) is the mission ID(S2A/S2B)
         MSIL1C : (MSIXXX) Product procesing level
-        20210521T131241 : (YYYYMMDDHHMMSS) Sensing start time
+        20210521T131241 : (YYYYMMDDTHHMMSS) Sensing start time
         N0300 : (Nxxyy) Processing Baseline number
         R138 : Relative Orbit number (R001 - R143)
         T23KMQ : (Txxxxx) Tile Number
