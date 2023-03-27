@@ -1,5 +1,9 @@
 ## GET-pak
-### **G**éosciences **E**nvironnement **T**oulouse - **P**rocessing and **a**nalysis Wor**k**bench
+**G**éosciences **E**nvironnement **T**oulouse - **P**rocessing and **a**nalysis Wor**k**bench
+
+GETpak aims to provide tools for Sentinel-2, Sentinel-3, GeoTIFF, NetCDF and vector data manipulation and validation.
+
+
             _..._
           .'     '.      _
          /    .-""-\   _/ \ 
@@ -16,6 +20,27 @@
              /-._/-._/                                            88
              \   `\  \                                            88
               `-._/._/
-### 
----
-This package provides tools for Sentinel-2, Sentinel-3, GeoTIFF, NetCDF and vector manipulation and validation.
+### Setup
+⚠️ GDAL is a requirement for the installation, therefore, 
+usage of a conda environment 
+([Anaconda.org](https://www.anaconda.com/products/individual)) 
+is strongly recommended. Unless you know what you are doing (-:
+
+## Installation
+Create a Conda environment (python versions above 3.9 were not tested but they should also be compatible):
+```
+conda create --name getpak python=3.9
+```
+Activate your conda env:
+```
+conda activate getpak
+```
+With your conda env activated, install GDAL before installing `getpak` to avoid dependecy errors:
+```
+conda install -c conda-forge gdal
+```
+Clone `getpak` repo to the desired location, enter it and type:
+```
+pip install -e .
+```
+(Setup in edit mode is strongly recommended until a valid stable release is added to the Python Package Index - PyPI).
