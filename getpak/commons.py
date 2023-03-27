@@ -62,6 +62,18 @@ class Utils:
         idx = (np.abs(array - value)).argmin()
         return idx
 
+    @staticmethod
+    def walk_talk(path2walk, fpattern='.nc'):
+        output_flist = []
+        for root, dirs, files in os.walk(path2walk, topdown=False):
+            for name in files:
+                if name.endswith(fpattern):
+                    f = Path(os.path.join(root, name))
+                    # f_str = name.split('_')[0]+'_'+name.split('_')[2]
+                    output_flist.append(f)
+        print(f'{len(output_flist)} files found.')
+        return output_flist
+
     # https://stackoverflow.com/questions/6039103/counting-depth-or-the-deepest-level-a-nested-list-goes-to
     @staticmethod
     def depth(somelist): return isinstance(somelist, list) and max(map(Utils.depth, somelist)) + 1
