@@ -27,7 +27,7 @@ class Raster:
             byte_content = s2projdata.read()
             self.s2projgrid = json.loads(byte_content)
 
-    
+    @staticmethod
     def array2tiff(ndarray_data, str_output_file, transform, projection, no_data=-1, compression='COMPRESS=PACKBITS'):
         '''
         Given an input ndarray and the desired projection parameters, create a raster.tif using GDT_Float32.
@@ -64,7 +64,8 @@ class Raster:
         data = None
         outdata = None
         pass
-
+    
+    @staticmethod
     def reproj(in_raster, out_raster, target_crs='EPSG:4326'):
         '''
         Given an input raster.tif reproject it to reprojected.tif using @target_crs (default = 'EPSG:4326').
