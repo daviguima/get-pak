@@ -21,6 +21,10 @@ class Raster:
     
     reproj(in_raster, out_raster, target_crs='EPSG:4326')
         Given an input raster.tif reproject it to reprojected.tif using @target_crs
+
+    shp_stats(tif_file, shp_poly, keep_spatial=True, statistics='count min mean max median std')
+        Given a single-band GeoTIFF file and a vector.shp return statistics inside the polygon.
+
     '''
     def __init__(self, parent_log=None):
             if parent_log:
@@ -110,7 +114,7 @@ class Raster:
         pass
     
     @staticmethod
-    def shp_stats(tif_file, shp_poly):
+    def shp_stats(tif_file, shp_poly, keep_spatial=False, statistics='count min mean max median std'):
         '''
         Given a single-band GeoTIFF file and a vector.shp return statistics inside the polygon.
         
@@ -118,15 +122,24 @@ class Raster:
         ----------
         @param tif_file: path to raster.tif file.
         @param shp_poly: path to the polygon.shp file.
-                
+        @param statistics: what to extract from the shapes, available values are:
+        
+        min, max, mean, count, sum, std, median, majority,
+        minority, unique, range, nodata, percentile.
+        https://pythonhosted.org/rasterstats/manual.html#zonal-statistics        
+        
         @return: roi_stats (dict) containing the extracted statistics inside the region of interest.
         '''
         with fiona.open(shp_poly) as src:
-            roi_stats = zonal_stats(src, tif_file,
-                        stats="count min mean max median std",
-                        raster_out=True,
-                        band=1)
-        return roi_stats
+            roi_stats = zonal_stats(src,
+                                    tif_file,
+                                    stats=statistics,
+                                    raster_out=True,
+                                    all_touched=True,
+                                    geojson_out=keep_spatial,
+                                    band=1)
+        # Original output comes inside a list containing only the output dict:
+        return roi_stats[0]
     
 
 class GRS:
