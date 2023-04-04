@@ -29,13 +29,13 @@ class Validation:
     @staticmethod
     def rrmse(y_true, y_pred): #4
         # https://www.analyticsvidhya.com/blog/2021/10/evaluation-metric-for-regression-models/
-        '''
+        """
         Model accuracy is:
         RRMSE < 10% (Excellent)
         RRMSE is between 10% and 20% (Good)
         RRMSE is between 20% and 30% (Fair)
         RRMSE > 30% (Poor)
-        '''
+        """
         num = np.sum(np.square(np.asarray(y_true) - np.asarray(y_pred)))
         den = np.sum(np.square(y_pred))
         squared_error = num/den
@@ -44,11 +44,11 @@ class Validation:
 
     # implementation of NRMSE with standard deviation
     def nrmse(self, y_true, y_pred): #5
-        '''
+        """
         NRMSE is a good measure when you want to compare the models of different dependent variables or 
         when the dependent variables are modified (log-transformed or standardized). It overcomes the 
         scale-dependency and eases comparison between models of different scales or even between datasets.
-        '''
+        """
         local_rmse = self.rmse(y_true, y_pred)
         nrmse = local_rmse / np.std(y_pred)
         return nrmse

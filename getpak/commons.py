@@ -63,13 +63,12 @@ class Utils:
         return idx
 
     @staticmethod
-    def walk_talk(path2walk, fpattern='.nc'):
+    def walktalk(path2walk, fpattern='.nc'):
         output_flist = []
         for root, dirs, files in os.walk(path2walk, topdown=False):
             for name in files:
                 if name.endswith(fpattern):
                     f = Path(os.path.join(root, name))
-                    # f_str = name.split('_')[0]+'_'+name.split('_')[2]
                     output_flist.append(f)
         print(f'{len(output_flist)} files found.')
         return output_flist
@@ -551,9 +550,9 @@ class Footprinter:
 
     @staticmethod
     def _xml2dict(xfdumanifest):
-        '''
+        """
         Internal function that reads the .SEN3/xfdumanifest.xml and generates a dictionary with the relevant data.
-        '''
+        """
         result = {}
         with open(xfdumanifest) as xmlf:
             # grab the relevant contents and add them to a dict
@@ -572,9 +571,9 @@ class Footprinter:
 
     @staticmethod
     def _gml2shp(gml_in, shp_out):
-        '''
+        """
         given a .GML file (gml_in), convert it to a .SHP (shp_out).
-        '''
+        """
         # https://pcjericks.github.io/py-gdalogr-cookbook/vector_layers.html#create-a-new-layer-from-the-extent-of-an-existing-layer
         # Get the Layer's Geometry
         inGMLfile = gml_in
@@ -631,9 +630,9 @@ class Footprinter:
         pass
 
     def manifest2shp(self, xfdumanifest, filename):
-        '''
+        """
         Given a .SEN3/xfdumanifest.xml and a filename, generates a .shp and a .gml
-        '''
+        """
         # get the dict
         xmldict = self._xml2dict(xfdumanifest)
         # add path to "to-be-generated" gml and shp files
@@ -651,10 +650,10 @@ class Footprinter:
 
     @staticmethod
     def _shp_extent(shp):
-        '''
+        """
         Reads a ESRI Shapefile and return its extent as a str separated by spaces.
         e.x. output: '-71.6239 -58.4709 -9.36789 0.303954'
-        '''
+        """
         ds = ogr.Open(shp)
         layer = ds.GetLayer()
         feature = layer.GetNextFeature()
@@ -665,9 +664,9 @@ class Footprinter:
         return ' '.join(extent_str)
 
     def manifest2tiff(self, xfdumanifest):
-        '''
+        """
         Reads .SEN3/xfdumanifest.xml and generates a .tiff raster.
-        '''
+        """
         # get the complete directory path but not the file base name
         img_path = xfdumanifest.split('/xfdu')[0]
         # get only the date of the img from the complete path, ex: '20190904T133117'

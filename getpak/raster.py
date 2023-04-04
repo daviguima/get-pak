@@ -11,7 +11,7 @@ from rasterio.warp import calculate_default_transform, reproject, Resampling
 
 
 class Raster:
-    '''
+    """
     Generic class containing methods for matricial manipulations
     
     Methods
@@ -25,7 +25,7 @@ class Raster:
     shp_stats(tif_file, shp_poly, keep_spatial=True, statistics='count min mean max median std')
         Given a single-band GeoTIFF file and a vector.shp return statistics inside the polygon.
 
-    '''
+    """
     def __init__(self, parent_log=None):
             if parent_log:
                 self.log = parent_log
@@ -35,7 +35,7 @@ class Raster:
 
     @staticmethod
     def array2tiff(ndarray_data, str_output_file, transform, projection, no_data=-1, compression='COMPRESS=PACKBITS'):
-        '''
+        """
         Given an input ndarray and the desired projection parameters, create a raster.tif using GDT_Float32.
         
         Parameters
@@ -48,7 +48,7 @@ class Raster:
         @param compression:
 
         @return: None (If all goes well, array2tiff should pass and generate a file inside @str_output_file)
-        '''
+        """
         # Create file using information from the template
         outdriver = gdal.GetDriverByName("GTiff")  # http://www.gdal.org/gdal_8h.html
         # imgs_out = /work/scratch/guimard/grs2spm/
@@ -70,7 +70,7 @@ class Raster:
     
     @staticmethod
     def reproj(in_raster, out_raster, target_crs='EPSG:4326'):
-        '''
+        """
         Given an input raster.tif reproject it to reprojected.tif using @target_crs (default = 'EPSG:4326').
         
         Parameters
@@ -80,7 +80,7 @@ class Raster:
         @param target_crs:
         
         @return: None (If all goes well, reproj should pass and generate a reprojected file inside @out_raster)
-        '''
+        """
         # Open the input raster file
         with rasterio.open(in_raster) as src:
 
@@ -115,13 +115,16 @@ class Raster:
     
     @staticmethod
     def shp_stats(tif_file, shp_poly, keep_spatial=False, statistics='count min mean max median std'):
-        '''
+        """
         Given a single-band GeoTIFF file and a vector.shp return statistics inside the polygon.
         
         Parameters
         ----------
         @param tif_file: path to raster.tif file.
         @param shp_poly: path to the polygon.shp file.
+        @param keep_spatial (bool): 
+            True = include the input shp_poly in the output as GeoJSON 
+            False (default) = get only the mini_raster and statistics
         @param statistics: what to extract from the shapes, available values are:
         
         min, max, mean, count, sum, std, median, majority,
@@ -129,7 +132,7 @@ class Raster:
         https://pythonhosted.org/rasterstats/manual.html#zonal-statistics        
         
         @return: roi_stats (dict) containing the extracted statistics inside the region of interest.
-        '''
+        """
         with fiona.open(shp_poly) as src:
             roi_stats = zonal_stats(src,
                                     tif_file,
@@ -143,21 +146,21 @@ class Raster:
     
 
 class GRS:
-    '''
+    """
     Core functionalities to handle GRS files
 
     Methods
     -------
     metadata(grs_file_entry)
         Given a GRS string element, return file metadata extracted from its name.
-    '''
+    """
     def __init__(self, parent_log=None):
             if parent_log:
                 self.log = parent_log
     
     @staticmethod
     def metadata(grs_file_entry):
-        '''
+        """
         Given a GRS file return metadata extracted from its name:
         
         Parameters
@@ -187,7 +190,7 @@ class GRS:
         Further reading:
         Sentinel-2 MSI naming convention:
         URL = https://sentinels.copernicus.eu/web/sentinel/user-guides/sentinel-2-msi/naming-convention
-        '''
+        """
         metadata = {}
         basefile = os.path.basename(grs_file_entry)
         mission,proc_level,date_n_time,proc_ver,r_orbit,tile,prod_disc,cc,ver = basefile.split('_')
