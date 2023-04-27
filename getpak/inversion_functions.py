@@ -62,23 +62,17 @@ def chl_gitelson2(Red, RedEdg1):
 # JM Hybride 1
 def chl_h1(Red, RedEdge1, RedEdge2):
     threshold = RedEdge1 - Red  # B5 - B4
-    if threshold < 0:
-        chl = 115.107 * RedEdge2 * (1/Red - 1/RedEdge1) + 16.56
-    elif threshold > 0:
-        chl = 115.794 * RedEdge2 * (1/Red - 1/RedEdge1) + 20.678
-    else:
-        chl = np.nan
+    chl = np.zeros_like(threshold)
+    chl[threshold < 0] = 115.107 * RedEdge2 * (1/Red - 1/RedEdge1) + 16.56
+    chl[threshold >= 0] = 115.794 * RedEdge2 * (1/Red - 1/RedEdge1) + 20.678
     return chl
 
 # JM Hybride 2
 def chl_h2(Red, RedEdge1, RedEdge2):
     threshold = RedEdge1 - Red  # B5 - B4
-    if threshold < 0:
-        chl = 46.859 * RedEdge1/Red - 29.916
-    elif threshold > 0:
-        chl = 115.794 * RedEdge2 * (1/Red - 1/RedEdge1) + 20.678
-    else:
-        chl = np.nan
+    chl = np.zeros_like(threshold)
+    chl[threshold < 0] = 46.859 * RedEdge1/Red - 29.916
+    chl[threshold >= 0] = 115.794 * RedEdge2 * (1/Red - 1/RedEdge1) + 20.678
     return chl
 
 # Turbidity (FNU) Dogliotti
