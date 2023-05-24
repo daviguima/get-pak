@@ -133,14 +133,23 @@ class Raster:
         
         @return: roi_stats (dict) containing the extracted statistics inside the region of interest.
         """
-        with fiona.open(shp_poly) as src:
-            roi_stats = zonal_stats(src,
-                                    tif_file,
-                                    stats=statistics,
-                                    raster_out=True,
-                                    all_touched=True,
-                                    geojson_out=keep_spatial,
-                                    band=1)
+        # with fiona.open(shp_poly) as src:
+        #     roi_stats = zonal_stats(src,
+        #                             tif_file,
+        #                             stats=statistics,
+        #                             raster_out=True,
+        #                             all_touched=True,
+        #                             geojson_out=keep_spatial,
+        #                             band=1)
+        # # Original output comes inside a list containing only the output dict:
+        # return roi_stats[0]
+        roi_stats = zonal_stats(shp_poly,
+                                tif_file,
+                                stats=statistics,
+                                raster_out=True,
+                                all_touched=True,
+                                geojson_out=keep_spatial,
+                                band=1)
         # Original output comes inside a list containing only the output dict:
         return roi_stats[0]
     
