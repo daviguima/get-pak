@@ -1,6 +1,5 @@
 import os
 import json
-import fiona
 import rasterio
 import pkg_resources
 
@@ -9,6 +8,7 @@ from datetime import datetime
 from rasterstats import zonal_stats
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 
+from getpak.commons import Utils as u
 
 class Raster:
     """
@@ -29,6 +29,10 @@ class Raster:
     def __init__(self, parent_log=None):
             if parent_log:
                 self.log = parent_log
+            else:
+                INSTANCE_TIME_TAG = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
+                logfile = os.path.join(os.getcwd(), 'getpak_raster_' + INSTANCE_TIME_TAG + '.log')
+            # Import CRS projection information from /data/s2_proj_ref.json
             s2projdata = pkg_resources.resource_stream(__name__, 'data/s2_proj_ref.json')
             byte_content = s2projdata.read()
             self.s2projgrid = json.loads(byte_content)
@@ -226,5 +230,48 @@ class GRS:
 
         return metadata
     
+    @staticmethod
+    def get_GRS_dict(grs_nc_file):
+        # TODO: optimize this function
+        gdct = {}
+        grs = nc.Dataset(grs_nc_file)
+        gdct['Rrs_B2'] = grs['Rrs_B2'][:].data  # B2 - Blue
+        gdct['Rrs_B2'] = grs['Rrs_B4'][:].data  # B4:665 - Red
+        gdct['Rrs_B2'] = grs['Rrs_B5'][:].data  # B5:705 - RedEdg 1
+        gdct['Rrs_B2'] = grs['Rrs_B6'][:].data  # B6 - RedEdg 2
+        gdct['Rrs_B2'] = grs['Rrs_B7'][:].data  # B7:783 - RedEdg 3
+        gdct['Rrs_B2'] = grs['Rrs_B8A'][:].data # B8A:865- Nir 2
+        return gdct
     
+    def param2tiff(self, ndarray_data, img_ref, output_img, no_data=0, gdal_driver_name="GTiff"):
+        
+        # Gather information from the template file
+        ref_data = gdal.Open(img_ref)
+        trans = ref_data.GetGeoTransform()
+        proj = ref_data.GetProjection()
+        # nodatav = 0 #data.GetNoDataValue()
+        # Create file using information from the template
+        outdriver = gdal.GetDriverByName(gdal_driver_name)  # http://www.gdal.org/gdal_8h.html
+        
+        [cols, rows] = ndarray_data.shape
+        
+        print(f'Writing output .tiff')
+        # GDT_Byte = 1, GDT_UInt16 = 2, GDT_UInt32 = 4, GDT_Int32 = 5, GDT_Float32 = 6,
+        # options=['COMPRESS=PACKBITS'] -> https://gdal.org/drivers/raster/gtiff.html#creation-options
+        outdata = outdriver.Create(output_img, rows, cols, 1, gdal.GDT_Float32, options=['COMPRESS=PACKBITS'])
+        # Write the array to the file, which is the original array in this example
+        outdata.GetRasterBand(1).WriteArray(ndarray_data)
+        # Set a no data value if required
+        outdata.GetRasterBand(1).SetNoDataValue(no_data)
+        # Georeference the image
+        outdata.SetGeoTransform(trans)
+        # Write projection information
+        outdata.SetProjection(proj)
+
+        # Closing the files
+        # https://gdal.org/tutorials/raster_api_tut.html#using-create
+        data = None
+        outdata = None
+        self.log.info('')
+        pass
     

@@ -27,8 +27,7 @@ setup(
         'scikit_learn',
         'matplotlib',
         'numpy',
-        'pandas'
-        'rasterstats',
-        'fiona'
+        'pandas',
+        'rasterstats'
         ]
     )
