@@ -30,7 +30,7 @@ class Raster:
             if parent_log:
                 self.log = parent_log
             else:
-                INSTANCE_TIME_TAG = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
+                INSTANCE_TIME_TAG = datetime.now().strftime('%Y%m%dT%H%M%S')
                 logfile = os.path.join(os.getcwd(), 'getpak_raster_' + INSTANCE_TIME_TAG + '.log')
             # Import CRS projection information from /data/s2_proj_ref.json
             s2projdata = pkg_resources.resource_stream(__name__, 'data/s2_proj_ref.json')
