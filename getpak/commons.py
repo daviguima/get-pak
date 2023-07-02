@@ -44,13 +44,15 @@ class Utils:
     def tic():
         global _start_time
         _start_time = time.time()
+        return _start_time
 
     @staticmethod
     def tac():
-        t_sec = round(time.time() - _start_time)
+        t_raw = time.time()
+        t_sec = round(t_raw - _start_time)
         (t_min, t_sec) = divmod(t_sec, 60)
         (t_hour, t_min) = divmod(t_min, 60)
-        return t_hour, t_min, t_sec
+        return t_hour, t_min, t_sec, t_raw
 
     @staticmethod
     def repeat_to_length(s, wanted):
