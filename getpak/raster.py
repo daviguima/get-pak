@@ -1,9 +1,13 @@
 import os
 import json
+import fiona
+import netCDF4 as nc
+import numpy as np
 import rasterio
-import pkg_resources
+import rasterio.mask
+import scipy.ndimage
+import importlib_resources
 
-from osgeo import gdal
 from datetime import datetime
 from rasterstats import zonal_stats
 from rasterio.warp import calculate_default_transform, reproject, Resampling
@@ -17,6 +21,9 @@ class Raster:
     Methods
     -------
     array2tiff(ndarray_data, str_output_file, transform, projection, no_data=-1, compression='COMPRESS=PACKBITS')
+        Given an input ndarray and the desired projection parameters, create a raster.tif using rasterio.
+
+    array2tiff_gdal(ndarray_data, str_output_file, transform, projection, no_data=-1, compression='COMPRESS=PACKBITS')
         Given an input ndarray and the desired projection parameters, create a raster.tif using GDT_Float32.
     
     reproj(in_raster, out_raster, target_crs='EPSG:4326')
@@ -24,6 +31,18 @@ class Raster:
 
     shp_stats(tif_file, shp_poly, keep_spatial=True, statistics='count min mean max median std')
         Given a single-band GeoTIFF file and a vector.shp return statistics inside the polygon.
+
+    extract_px(rasterio_rast, shapefile, rrs_dict, bands)
+        Given a dict of Rrs and a polygon, to extract the values of pixels from each band
+
+    sam(self, values, single=False)
+        Given a a set of pixels, uses the Spectral Angle Mapper to generate angle between the Rrs and the OWTs
+
+    classify_owt_px(self, rrs_dict, bands)
+        Function to classify the OWT of each pixel
+
+    classify_owt(self, rasterio_rast, shapefiles, rrs_dict, bands, min_px=6)
+        Function to classify the the OWT of pixels inside a shapefile (or a set of shapefiles)
 
     """
     def __init__(self, parent_log=None):
@@ -33,9 +52,16 @@ class Raster:
                 INSTANCE_TIME_TAG = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
                 logfile = os.path.join(os.getcwd(), 'getpak_raster_' + INSTANCE_TIME_TAG + '.log')
             # Import CRS projection information from /data/s2_proj_ref.json
-            s2projdata = pkg_resources.resource_stream(__name__, 'data/s2_proj_ref.json')
-            byte_content = s2projdata.read()
+            s2projdata = importlib_resources.files(__name__).joinpath('data/s2_proj_ref.json')
+            with s2projdata.open('rb') as fp:
+                byte_content = fp.read()
             self.s2projgrid = json.loads(byte_content)
+
+            # Import OWT means for S2 MSI from /data/means_OWT_S2A_Spyrakos.json
+            means_owt = importlib_resources.files(__name__).joinpath('data/means_OWT_S2A_Spyrakos.json')
+            with means_owt.open('rb') as fp:
+                byte_content = fp.read()
+            self.owts = dict(json.loads(byte_content))
 
     @staticmethod
     def array2tiff(ndarray_data, str_output_file, transform, projection, no_data=-1, compression='COMPRESS=PACKBITS'):
@@ -45,11 +71,42 @@ class Raster:
         Parameters
         ----------
         @param ndarray_data: Inform if the index should be saved as array in the output folder
+        @param str_output_file: string of the path of the file to be written
+        @param transform: rasterio affine transformation matrix (resolution and "upper left" coordinate)
+        @param projection: projection CRS
+        @param no_data: the value for no data
+        @param compression: type of file compression
+
+        @return: None (If all goes well, array2tiff should pass and generate a file inside @str_output_file)
+        """
+        with rasterio.open(fp=str_output_file,
+                           mode='w',
+                           driver='GTiff',
+                           height=ndarray_data.shape[0],
+                           width=ndarray_data.shape[1],
+                           count=1,
+                           dtype=ndarray_data.dtype,
+                           crs=projection,
+                           transform=transform,
+                           nodata=no_data,
+                           options=['COMPRESS=PACKBITS']) as dst:
+            dst.write(ndarray_data, 1)
+
+        pass
+
+    @staticmethod
+    def array2tiff_gdal(ndarray_data, str_output_file, transform, projection, no_data=-1, compression='COMPRESS=PACKBITS'):
+        """
+        Given an input ndarray and the desired projection parameters, create a raster.tif using GDT_Float32.
+
+        Parameters
+        ----------
+        @param ndarray_data: Inform if the index should be saved as array in the output folder
         @param str_output_file:
         @param transform:
-        @param projection:
-        @param no_data:
-        @param compression:
+        @param projection: projection CRS
+        @param no_data: the value for no data
+        @param compression: type of file compression
 
         @return: None (If all goes well, array2tiff should pass and generate a file inside @str_output_file)
         """
@@ -156,7 +213,125 @@ class Raster:
                                 band=1)
         # Original output comes inside a list containing only the output dict:
         return roi_stats[0]
-    
+
+    @staticmethod
+    def extract_px(rasterio_rast, shapefile, rrs_dict, bands):
+        """
+        Given a dict of Rrs and a polygon, to extract the values of pixels from each band
+
+        Parameters
+        ----------
+        rasterio_rast: a rasterio raster open with rasterio.open
+        shapefile: a polygon opened as geometry using fiona
+        rrs_dict: a dict containing the Rrs bands
+        bands: an array containing the bands of the rrs_dict to be extracted
+
+        Returns
+        -------
+        values: an array of dimension n, where n is the number of bands, containing the values inside the polygon
+        slic: the slice of the polygon (from the rasterio window)
+        mask_image: the rasterio mask
+        """
+        # rast = rasterio_rast.read(1)
+        mask_image, _, window_image = rasterio.mask.raster_geometry_mask(rasterio_rast, [shapefile], crop=True)
+        slic = window_image.toslices()
+        values = []
+        for n, band in enumerate(bands):
+            values.append(rrs_dict[band][slic[0], slic[1]][mask_image == False])
+
+        return values, slic, mask_image
+
+    def sam(self, values, single=False):
+        """
+        Spectral Angle Mapper for OWT classification for a set of pixels
+        It calculates the angle between the Rrs of a set of pixels and those of the 13 OWT of inland waters (Spyrakos et al., 2018)
+        Input values are the values of the pixels from B2 to B7, the dict of the OWTs is already stored
+        Returns the spectral angle between the Rrs of the pixels and each OWT
+        To classify pixels individually, set single=True
+        ----------
+        """
+        angle = np.zeros((len(self.owts.keys())))
+        if single:
+            E = values / values.sum()
+        else:
+            med = np.zeros(shape=len(values))
+            for i in range(len(values)):
+                med[i] = np.nanmean(values[i])
+            E = med / med.sum()
+        nE = np.sqrt(np.power(E, 2).sum())
+        for n, key in enumerate(self.owts.keys()):
+            M = np.asarray([*self.owts[key].values()], dtype='float64')
+            nM = np.sqrt(np.power(M, 2).sum())
+            num = (E * M).sum()
+            den = nM * nE
+            angle[n] = np.arccos(num / den) * 180 / np.pi
+
+        return angle
+
+    def classify_owt_px(self, rrs_dict, bands):
+        """
+        Function to classify the OWT of each pixel
+
+        Parameters
+        ----------
+        rrs_dict: a dict containing the Rrs bands
+        bands: an array containing the bands (2 to 7) of the rrs_dict to be extracted
+
+        Returns
+        -------
+        classe_px: an array, with the same size as the input bands, with the pixels classified
+        """
+        nzero = np.where(np.isnan(rrs_dict[bands[0]]) == False)
+        classe = np.zeros(len(nzero[0]), dtype='int8')
+        for i in range(len(nzero[0])):
+            pix = np.zeros((len(bands)))
+            for n, band in enumerate(bands):
+                pix[n] = rrs_dict[band][nzero[0][i], nzero[1][i]]
+            a = self.sam(values=pix, single=True)
+            classe[i] = int(np.argmin(a) + 1)
+        # passing the values to a matrix with the same shape as the Rrs images
+        classe_px = np.where(np.isnan(rrs_dict[bands[0]]) == False, 1, 0)
+        for i in range(len(nzero[0])):
+            classe_px[nzero[0][i], nzero[1][i]] = classe[i]
+
+        return classe_px.astype('uint8')
+
+    def classify_owt(self, rasterio_rast, shapefiles, rrs_dict, bands, min_px=6):
+        """
+        Function to classify the the OWT of pixels inside a shapefile (or a set of shapefiles)
+
+        Parameters
+        ----------
+        rasterio_rast: a rasterio raster open with rasterio.open
+        shapefiles: a polygon (or set of polygons), usually of waterbodies to be classified, opened as geometry using fiona
+        rrs_dict: a dict containing the Rrs bands
+        bands: an array containing the bands of the rrs_dict to be extracted
+        min_px: minimum number of pixels in each polygon to operate the classification
+
+        Returns
+        -------
+        classe_spt: an array, with the same size as the input bands, with the classified pixels
+        classe_shp: an array with the same length as the shapefiles, with a OWT class for each polygon
+        """
+        classe_spt = rrs_dict[bands[0]].copy()
+        classe_spt[:, :] = 0
+        classe_shp = np.zeros((len(shapefiles)), dtype='uint8')
+        for i, shape in enumerate(shapefiles):
+            values, slic, mask = self.extract_px(rasterio_rast, shape, rrs_dict, bands)
+            # Verifying if there are more pixels than the minimum
+            # TODO: check if there is a better one-liner
+            if len(np.nonzero(np.isnan(values[0]) == False)[0]) >= min_px:
+                angles = self.sam(values)
+                classe_spt[slic[0], slic[1]][mask == False] = int(np.argmin(angles) + 1)
+                classe_shp[i] = int(np.argmin(angles) + 1)
+            else:
+                classe_spt[slic[0], slic[1]][mask == False] = int(0)
+                classe_shp[i] = int(0)
+        # removing the values where class=30
+        # aux = np.where(classe==30)
+        # classe[aux[0],aux[1]] = 0
+
+        return classe_spt.astype('uint8'), classe_shp
 
 class GRS:
     """
@@ -274,4 +449,5 @@ class GRS:
         outdata = None
         self.log.info('')
         pass
-    
+
+#    def proc_grs_wd_intersect(self, grs_dict, ):
