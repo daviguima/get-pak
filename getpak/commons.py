@@ -285,6 +285,45 @@ class Utils:
         xmax = np.max(vertices[:, 1])
         return xmin, xmax, ymin, ymax
 
+    @staticmethod
+    def nan2zero(nd_mtx):
+        """
+        Transforms numpy NaNs into zeros
+        """
+        where_are_NaNs = np.isnan(nd_mtx)
+        nd_mtx[where_are_NaNs] = -1
+        return nd_mtx
+
+    @staticmethod
+    def intersect_matrices(mtx_a, mtx_b):
+        """
+        Intersection between two matrices, where the intersection remains and other values are replaced by 0
+        """
+        if not (mtx_a.shape == mtx_b.shape):
+            return False
+
+        mtx_intersect = np.where((mtx_a == mtx_b), mtx_a, 0)
+        return mtx_intersect
+
+    @staticmethod
+    def sch_date_matchups(fst_dates, snd_dates, fst_tile_list, snd_tile_list):
+        """
+        Function to search for the matchup dates in the directories given a set of dates
+        Returns two dicts with the dir paths and an array of dates
+        """
+        matches = {}
+        str_matches = {}  # STR dict to avoid -> TypeError: Object of type PosixPath is not JSON serializable
+        dates = []
+        for n, date in enumerate(fst_dates):
+            arr_index = np.where(np.array(snd_dates) == date)[0]
+            if len(arr_index) > 0:
+                matches[date] = {'GRS': fst_tile_list[n], 'WD': snd_tile_list[arr_index[0]]}
+                str_matches[date] = {'GRS': str(fst_tile_list[n]),
+                                     'WD': str(snd_tile_list[arr_index[0]])}  # redundant backup
+                dates.append(date)
+
+        return matches, str_matches, dates
+
 class DefaultDicts:
 
     clustering_methods = {'M0': ['Oa17_reflectance:float', 'Oa21_reflectance:float'],
