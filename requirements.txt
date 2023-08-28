@@ -1,6 +1,8 @@
-scikit_learn
+fiona
 matplotlib
+netcdf4
 numpy
 pandas
+rasterio
 rasterstats
-netcdf4
+scikit_learn
