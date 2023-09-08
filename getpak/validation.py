@@ -75,32 +75,31 @@ class Validation:
         return mean_absolute_percentage_error(y_true, y_pred)
 
     @staticmethod
-    def corr(y_true, y_pred, m='spearman'): #8 #9 #10
+    def corr(y_true, y_pred, m='spearman'):  # 8 #9 #10
         # Test for same DataFrame
-        if (isinstance(y_true, pd.Series) and isinstance(y_true, pd.Series)):
+        if isinstance(y_true, pd.Series) and isinstance(y_true, pd.Series):
             # Compute pairwise correlation of columns, excluding NA/null values.
             # https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.corr.html
             return y_true.corr(y_pred, method=m)
         else:
             # Test for other dtypes and convert to DF
             try:
-                df = pd.DataFrame(data={'y_true':y_true,'y_pred':y_pred})
-                return df['y_true'].corr(df['y_pred'],method=m)
+                df = pd.DataFrame(data={'y_true': y_true, 'y_pred': y_pred})
+                return df['y_true'].corr(df['y_pred'], method=m)
             except:
                 e = sys.exc_info()[0]
                 print(e)
-        
+
     def get_stats(self, y_true, y_pred):
         res = {}
-        res['R2']       = round(self.r2(y_true, y_pred), 2)
-        res['BIAS']     = round(self.bias(y_true, y_pred), 2)
-        res['MAPE']     = round(self.mape(y_true, y_pred), 2)
-        res['RMSE']     = round(self.rmse(y_true, y_pred), 2)
-        res['RRMSE']    = round(self.rrmse(y_true, y_pred), 2)
-        res['NRMSE']    = round(self.nrmse(y_true, y_pred), 2)
-        res['RMSLE']    = round(self.rmsle(y_true, y_pred), 2)
-        res['Spearman'] = round(self.corr(y_true, y_pred), 2) # default m = spearman
-        res['Pearson']  = round(self.corr(y_true, y_pred, m='pearson'), 2)
-        res['Kendall']  = round(self.corr(y_true, y_pred, m='kendall'), 2)
+        res['R2'] = round(self.r2(y_true, y_pred), 2)
+        res['BIAS'] = round(self.bias(y_true, y_pred), 2)
+        res['MAPE'] = round(self.mape(y_true, y_pred), 2)
+        res['RMSE'] = round(self.rmse(y_true, y_pred), 2)
+        res['RRMSE'] = round(self.rrmse(y_true, y_pred), 2)
+        res['NRMSE'] = round(self.nrmse(y_true, y_pred), 2)
+        res['RMSLE'] = round(self.rmsle(y_true, y_pred), 2)
+        res['Spearman'] = round(self.corr(y_true, y_pred), 2)  # default m = spearman
+        res['Pearson'] = round(self.corr(y_true, y_pred, m='pearson'), 2)
+        res['Kendall'] = round(self.corr(y_true, y_pred, m='kendall'), 2)
         return res
-
