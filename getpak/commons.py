@@ -331,8 +331,20 @@ class Utils:
     @staticmethod
     def sch_date_matchups(fst_dates, snd_dates, fst_tile_list, snd_tile_list):
         """
-        Function to search for the matchup dates in the directories given a set of dates
-        Returns two dicts with the dir paths and an array of dates
+        Function to search for the matchup dates of two sets of images given two sets of dates.
+        This function also writes the directories of the matchups for each date
+        Parameters
+        ----------
+        fst_dates: list of dates of the first set of images
+        snd_dates: list of dates of the second set of images
+        fst_tile_list: list of the path to the first set of images
+        snd_tile_list: list of the path to the first set of images
+
+        Returns
+        -------
+        matches, str_matches: Two dicts which the keys are the matchups dates, and the values are the paths to the images of the matchups
+        # hardcoded to write for GRS and WD folders
+        dates: list of the matchup dates
         """
         matches = {}
         str_matches = {}  # STR dict to avoid -> TypeError: Object of type PosixPath is not JSON serializable
