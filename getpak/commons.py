@@ -88,10 +88,10 @@ class Utils:
         return idx
 
     @staticmethod
-    def walktalk(path2walk, fpattern='.nc'):
+    def walktalk(path2walk, fpattern='.nc', dir_is_file=False):
         output_flist = []
         for root, dirs, files in os.walk(path2walk, topdown=False):
-            for name in files:
+            for name in (dirs if dir_is_file else files):
                 if name.endswith(fpattern):
                     f = Path(os.path.join(root, name))
                     output_flist.append(f)
