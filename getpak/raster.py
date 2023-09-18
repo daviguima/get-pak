@@ -1,12 +1,13 @@
 import os
 import json
 import fiona
-import netCDF4 as nc
 import numpy as np
 import rasterio
 import rasterio.mask
 import scipy.ndimage
 import importlib_resources
+import xarray as xr
+from dask.distributed import Client
 
 from datetime import datetime
 from rasterstats import zonal_stats
@@ -229,19 +230,22 @@ class Raster:
         Returns
         -------
         values: an array of dimension n, where n is the number of bands, containing the values inside the polygon
-        slic: the slice of the polygon (from the rasterio window)
+        slice: the slice of the polygon (from the rasterio window)
         mask_image: the rasterio mask
         """
         # rast = rasterio_rast.read(1)
         mask_image, _, window_image = rasterio.mask.raster_geometry_mask(rasterio_rast, [shapefile], crop=True)
-        slic = window_image.toslices()
+        slices = window_image.toslices()
         values = []
-        for n, band in enumerate(bands):
-            values.append(rrs_dict[band][slic[0], slic[1]][mask_image == False])
+        for band in bands:
+            # subsetting the xarray dataset
+            subset_data = rrs_dict[band].isel(x=slices[1], y=slices[0])
+            # Extract values where mask_image is False
+            values.append(subset_data.where(~mask_image).values.flatten())
 
-        return values, slic, mask_image
+        return values, slices, mask_image
 
-    def sam(self, values, single=False):
+    def sam(self, rrs, single=False):
         """
         Spectral Angle Mapper for OWT classification for a set of pixels
         It calculates the angle between the Rrs of a set of pixels and those of the 13 OWT of inland waters (Spyrakos et al., 2018)
@@ -250,53 +254,59 @@ class Raster:
         To classify pixels individually, set single=True
         ----------
         """
-        angle = np.zeros((len(self.owts.keys())))
         if single:
-            E = values / values.sum()
+            E = rrs / rrs.sum()
         else:
-            med = np.zeros(shape=len(values))
-            for i in range(len(values)):
-                med[i] = np.nanmean(values[i])
+            med = np.nanmean(rrs, axis=1)
             E = med / med.sum()
-        nE = np.sqrt(np.power(E, 2).sum())
-        for n, key in enumerate(self.owts.keys()):
-            M = np.asarray([*self.owts[key].values()], dtype='float64')
-            nM = np.sqrt(np.power(M, 2).sum())
-            num = (E * M).sum()
-            den = nM * nE
-            angle[n] = np.arccos(num / den) * 180 / np.pi
+        # norm of the vector
+        nE = np.linalg.norm(E)
 
-        return angle
+        # Convert owts values to numpy array for vectorized computations
+        M = np.array([list(val.values()) for val in self.owts.values()])
+        nM = np.linalg.norm(M, axis=1)
 
-    def classify_owt_px(self, rrs_dict, bands):
+        # scalar product
+        num = np.dot(M, E)
+        den = nM * nE
+
+        angles = np.arccos(num / den) * 180 / np.pi
+
+        return int(np.argmin(angles) + 1)
+
+    def classify_owt_px(self, rrs_dict, bands=['Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7']):
         """
         Function to classify the OWT of each pixel
 
         Parameters
         ----------
-        rrs_dict: a dict containing the Rrs bands
+        rrs_dict: a xarray Dataset containing the Rrs bands
         bands: an array containing the bands (2 to 7) of the rrs_dict to be extracted
 
         Returns
         -------
-        classe_px: an array, with the same size as the input bands, with the pixels classified
+        class_px: an array, with the same size as the input bands, with the pixels classified
         """
-        nzero = np.where(np.isnan(rrs_dict[bands[0]]) == False)
-        classe = np.zeros(len(nzero[0]), dtype='int8')
+        # Drop the variables that won't be used in the classification
+        variables_to_drop = [var for var in rrs_dict.variables if var not in bands]
+        rrs = rrs_dict.drop_vars(variables_to_drop)
+        # Find non-NaN values
+        nzero = np.where(~np.isnan(rrs[bands[0]].values))
+        # array of OWT class for each pixel
+        class_px = np.zeros_like(rrs[bands[0]], dtype='uint8')
+        # array of angles to limit the loop
+        angles = np.zeros((len(nzero[0])), dtype='uint8')
+        # loop over each nonzero value in the rrs_dict
+        pix = np.zeros((len(nzero[0]), len(bands)))
+        for i in range(len(bands)):
+            pix[:, i] = rrs[bands[i]].values[nzero]
         for i in range(len(nzero[0])):
-            pix = np.zeros((len(bands)))
-            for n, band in enumerate(bands):
-                pix[n] = rrs_dict[band][nzero[0][i], nzero[1][i]]
-            a = self.sam(values=pix, single=True)
-            classe[i] = int(np.argmin(a) + 1)
-        # passing the values to a matrix with the same shape as the Rrs images
-        classe_px = np.where(np.isnan(rrs_dict[bands[0]]) == False, 1, 0)
-        for i in range(len(nzero[0])):
-            classe_px[nzero[0][i], nzero[1][i]] = classe[i]
+            angles[i] = self.sam(rrs=pix[i, :], single=True)
+        class_px[nzero] = angles
 
-        return classe_px.astype('uint8')
+        return class_px
 
-    def classify_owt(self, rasterio_rast, shapefiles, rrs_dict, bands, min_px=6):
+    def classify_owt(self, rasterio_rast, shapefiles, rrs_dict, bands=['Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7'], min_px=6):
         """
         Function to classify the the OWT of pixels inside a shapefile (or a set of shapefiles)
 
@@ -310,28 +320,27 @@ class Raster:
 
         Returns
         -------
-        classe_spt: an array, with the same size as the input bands, with the classified pixels
-        classe_shp: an array with the same length as the shapefiles, with a OWT class for each polygon
+        class_spt: an array, with the same size as the input bands, with the classified pixels
+        class_shp: an array with the same length as the shapefiles, with a OWT class for each polygon
         """
-        classe_spt = rrs_dict[bands[0]].copy()
-        classe_spt[:, :] = 0
-        classe_shp = np.zeros((len(shapefiles)), dtype='uint8')
+        class_spt = np.zeros(rrs_dict[bands[0]].shape, dtype='uint8')
+        class_shp = np.zeros((len(shapefiles)), dtype='uint8')
         for i, shape in enumerate(shapefiles):
-            values, slic, mask = self.extract_px(rasterio_rast, shape, rrs_dict, bands)
+            values, slices, mask = self.extract_px(rasterio_rast, shape, rrs_dict, bands)
             # Verifying if there are more pixels than the minimum
-            # TODO: check if there is a better one-liner
-            if len(np.nonzero(np.isnan(values[0]) == False)[0]) >= min_px:
-                angles = self.sam(values)
-                classe_spt[slic[0], slic[1]][mask == False] = int(np.argmin(angles) + 1)
-                classe_shp[i] = int(np.argmin(angles) + 1)
+            valid_pixels = np.isnan(values[0]) == False
+            if np.count_nonzero(valid_pixels) >= min_px:
+                angle = self.sam(values)
             else:
-                classe_spt[slic[0], slic[1]][mask == False] = int(0)
-                classe_shp[i] = int(0)
-        # removing the values where class=30
-        # aux = np.where(classe==30)
-        # classe[aux[0],aux[1]] = 0
+                angle = int(0)
 
-        return classe_spt.astype('uint8'), classe_shp
+            # classifying only the valid pixels inside the polygon
+            values = np.where(valid_pixels, angle, 0)
+            class_spt[slices[0], slices[1]] = values.reshape((mask.shape))
+            # classification by polygon
+            class_shp[i] = angle
+
+        return class_spt, class_shp
 
 class GRS:
     """
@@ -342,6 +351,7 @@ class GRS:
     metadata(grs_file_entry)
         Given a GRS string element, return file metadata extracted from its name.
     """
+
     def __init__(self, parent_log=None):
             if parent_log:
                 self.log = parent_log
@@ -375,13 +385,22 @@ class GRS:
         cc020 : GRS Cloud cover estimation (0-100%)
         v15 : GRS algorithm baseline version
 
+        For GRS version >=2.0, the naming does not include the cloud cover estimation nor the GRS version
+
         Further reading:
         Sentinel-2 MSI naming convention:
         URL = https://sentinels.copernicus.eu/web/sentinel/user-guides/sentinel-2-msi/naming-convention
         """
         metadata = {}
         basefile = os.path.basename(grs_file_entry)
-        mission,proc_level,date_n_time,proc_ver,r_orbit,tile,prod_disc,cc,ver = basefile.split('_')
+        splt = basefile.split('_')
+        if len(splt)==9:
+            mission,proc_level,date_n_time,proc_ver,r_orbit,tile,prod_disc,cc,aux = basefile.split('_')
+            ver,_ = aux.split('.')
+        else:
+            mission,proc_level,date_n_time,proc_ver,r_orbit,tile,aux = basefile.split('_')
+            prod_disc,_ = aux.split('.')
+            cc, ver = ['NA', 'v20']
         file_event_date = datetime.strptime(date_n_time, '%Y%m%dT%H%M%S')
         yyyy = f"{file_event_date.year:02d}"
         mm = f"{file_event_date.month:02d}"
@@ -406,17 +425,39 @@ class GRS:
         return metadata
     
     @staticmethod
-    def get_GRS_dict(grs_nc_file):
-        # TODO: optimize this function
-        gdct = {}
-        grs = nc.Dataset(grs_nc_file)
-        gdct['Rrs_B2'] = grs['Rrs_B2'][:].data  # B2 - Blue
-        gdct['Rrs_B2'] = grs['Rrs_B4'][:].data  # B4:665 - Red
-        gdct['Rrs_B2'] = grs['Rrs_B5'][:].data  # B5:705 - RedEdg 1
-        gdct['Rrs_B2'] = grs['Rrs_B6'][:].data  # B6 - RedEdg 2
-        gdct['Rrs_B2'] = grs['Rrs_B7'][:].data  # B7:783 - RedEdg 3
-        gdct['Rrs_B2'] = grs['Rrs_B8A'][:].data # B8A:865- Nir 2
-        return gdct
+    def get_grs_dict(grs_nc_file, grs_version='v15'):
+        '''
+        Opens the GRS netCDF files using the xarray library and dask, returning a DataArray containing only the Rrs bands
+        Parameters
+        ----------
+        grs_nc_file: the path to the GRS file
+        grs_version: a string with GRS version ('v15' or 'v20' for version 2.0.5)
+
+        Returns
+        -------
+        The xarray DataArray containing the 11 Rrs bands, named as 'Rrs_B*'
+        '''
+        # list of bands
+        bands = ['Rrs_B1', 'Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6',
+                 'Rrs_B7', 'Rrs_B8', 'Rrs_B8A', 'Rrs_B11', 'Rrs_B12']
+        if grs_version == 'v15':
+            ds = xr.open_dataset(grs_nc_file, engine="netcdf4", decode_coords='all', chunks={'y': 610, 'x': 610})
+            # List of variables to keep
+            if 'Rrs_B1' in ds.variables:
+                variables_to_keep = bands
+                # Drop the variables you don't want
+                variables_to_drop = [var for var in ds.variables if var not in variables_to_keep]
+                grs = ds.drop_vars(variables_to_drop)
+        elif grs_version == 'v20':
+            ds = xr.open_dataset(grs_nc_file, chunks={'y': 5490, 'x': 5490}, engine="netcdf4")
+            waves = ds['Rrs']['wl']
+            subset_dict = {band: ds['Rrs'].sel(wl=waves[i]).drop(['wl', 'x', 'y']) for i, band in enumerate(bands)}
+            grs = xr.Dataset(subset_dict)
+        else:
+            grs = None
+        ds.close()
+
+        return grs
     
     def param2tiff(self, ndarray_data, img_ref, output_img, no_data=0, gdal_driver_name="GTiff"):
         
