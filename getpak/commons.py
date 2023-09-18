@@ -6,6 +6,7 @@ import logging
 import zipfile
 import subprocess
 import numpy as np
+import fnmatch
 from pathlib import Path
 from PIL import Image
 
@@ -88,13 +89,16 @@ class Utils:
         return idx
 
     @staticmethod
-    def walktalk(path2walk, fpattern='.nc', dir_is_file=False):
+    def walktalk(path2walk, fpattern='.nc', dir_is_file=False, badstring=None):
         output_flist = []
         for root, dirs, files in os.walk(path2walk, topdown=False):
             for name in (dirs if dir_is_file else files):
+                # check the file format
                 if name.endswith(fpattern):
-                    f = Path(os.path.join(root, name))
-                    output_flist.append(f)
+                    # check if it is not the file you want
+                    if not fnmatch.fnmatch(name, badstring):
+                        f = Path(os.path.join(root, name))
+                        output_flist.append(f)
         print(f'{len(output_flist)} files found.')
         return output_flist
 
