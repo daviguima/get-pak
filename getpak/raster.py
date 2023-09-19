@@ -449,7 +449,7 @@ class GRS:
                 variables_to_drop = [var for var in ds.variables if var not in variables_to_keep]
                 grs = ds.drop_vars(variables_to_drop)
         elif grs_version == 'v20':
-            ds = xr.open_dataset(grs_nc_file, chunks={'y': 5490, 'x': 5490}, engine="netcdf4")
+            ds = xr.open_dataset(grs_nc_file, chunks={'y': 610, 'x': 610}, engine="netcdf4")
             waves = ds['Rrs']['wl']
             subset_dict = {band: ds['Rrs'].sel(wl=waves[i]).drop(['wl', 'x', 'y']) for i, band in enumerate(bands)}
             grs = xr.Dataset(subset_dict)
