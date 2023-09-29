@@ -314,7 +314,7 @@ class Raster:
         ----------
         rasterio_rast: a rasterio raster open with rasterio.open
         shapefiles: a polygon (or set of polygons), usually of waterbodies to be classified, opened as geometry using fiona
-        rrs_dict: a dict containing the Rrs bands
+        rrs_dict: a xarray Dataset containing the Rrs bands
         bands: an array containing the bands of the rrs_dict to be extracted
         min_px: minimum number of pixels in each polygon to operate the classification
 
@@ -336,7 +336,8 @@ class Raster:
 
             # classifying only the valid pixels inside the polygon
             values = np.where(valid_pixels, angle, 0)
-            class_spt[slices[0], slices[1]] = values.reshape((mask.shape))
+            # adding to avoid replacing values of cropping by other polygons
+            class_spt[slices[0], slices[1]] += values.reshape((mask.shape))
             # classification by polygon
             class_shp[i] = angle
 
