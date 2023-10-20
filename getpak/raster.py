@@ -323,8 +323,8 @@ class Raster:
         class_spt: an array, with the same size as the input bands, with the classified pixels
         class_shp: an array with the same length as the shapefiles, with a OWT class for each polygon
         """
-        class_spt = np.zeros(rrs_dict[bands[0]].shape, dtype='uint8')
-        class_shp = np.zeros((len(shapefiles)), dtype='uint8')
+        class_spt = np.zeros(rrs_dict[bands[0]].shape, dtype='int32')
+        class_shp = np.zeros((len(shapefiles)), dtype='int32')
         for i, shape in enumerate(shapefiles):
             values, slices, mask = self.extract_px(rasterio_rast, shape, rrs_dict, bands)
             # Verifying if there are more pixels than the minimum
@@ -341,7 +341,202 @@ class Raster:
             # classification by polygon
             class_shp[i] = angle
 
-        return class_spt, class_shp
+        return class_spt.astype('uint8'), class_shp.astype('uint8')
+
+    def water_colour(self, rasterio_rast, shapefiles, rrs_dict, bands=['Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5'],  min_px=6):
+        """
+        Function to calculate the water colour based on the Forel-Ule scale, using the bands of Sentinel-2 MSI, with the
+        coefficients derived by linear correlation by van der Woerd and Wernand (2018). The different combinations of S2
+        bands (10, 20 or 60 m resolution) in the visible spectrum can be used, with the default being at 20 m.
+
+        Parameters
+        ----------
+        rasterio_rast: a rasterio raster open with rasterio.open
+        shapefiles: a polygon (or set of polygons), usually of waterbodies to be classified, opened as geometry using fiona
+        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
+        bands: an array containing the bands of the rrs_dict to be extracted, in order from blue to red edge
+        min_px: minimum number of pixels in each polygon to operate the classification
+
+        Returns
+        -------
+        colour: an array, with the same size as the input bands, with the classified pixels
+        colour_spt: an array with the same length as the shapefiles, with the mean colour (angle) for each polygon
+        """
+        colour_spt = np.zeros(rrs_dict[bands[0]].shape, dtype='float16')
+        colour_shp = np.zeros((len(shapefiles)), dtype='float16')
+
+        for i, shape in enumerate(shapefiles):
+            values, slices, mask = self.extract_px(rasterio_rast, shape, rrs_dict, bands)
+            # Verifying if there are more pixels than the minimum
+            valid_pixels = np.isnan(values[0]) == False
+            if np.count_nonzero(valid_pixels) >= min_px:
+                med = np.nanmean(values, axis=1)
+                # calculation of the CIE tristimulus (no intercepts):
+                if len(bands) == 3:
+                    X = 12.040 * med[0] + 53.696 * med[1] + 32.087 * med[2]
+                    Y = 23.122 * med[0] + 65.702 * med[1] + 16.830 * med[2]
+                    Z = 61.055 * med[0] + 1.778 * med[1] + 0.015 * med[2]
+                    delta = lambda x: -164.83 * (alpha / 100) ** 5 + 1139.90 * (alpha / 100) ** 4 - 3006.04 * (
+                            alpha / 100) ** 3 + 3677.75 * (alpha / 100) ** 2 - 1979.71 * (alpha / 100) + 371.38
+                else if len(bands) == 4:
+                    X = 12.040 * med[0] + 53.696 * med[1] + 32.028 * med[2] + 0.529 * med[3]
+                    Y = 23.122 * med[0] + 65.702 * med[1] + 16.808 * med[2] + 0.192 * med[3]
+                    Z = 61.055 * med[0] + 1.778 * med[1] + 0.015 * med[2] + 0.000 * med[3]
+                    delta = lambda x : -161.23 * (alpha / 100) ** 5 + 1117.08 * (alpha / 100) ** 4 - 2950.14 * (
+                            alpha / 100) ** 3 + 3612.17 * (alpha / 100) ** 2 - 1943.57 * (alpha / 100) + 364.28
+                else if len(bands) == 5:
+                    X = 11.756 * med[0] + 6.423 * med[1] + 53.696 * med[2] + 32.028 * med[3] + 0.529 * med[4]
+                    Y = 1.744 * med[0] + 22.289 * med[1] + 65.702 * med[2] + 16.808 * med[3] + 0.192 * med[4]
+                    Z = 62.696 * med[0] + 31.101 * med[1] + 1.778 * med[2] + 0.015 * med[3] + 0.000 * med[4]
+                    delta = lambda x: -65.74 * (alpha / 100) ** 5 + 477.16 * (alpha / 100) ** 4 - 1279.99 * (
+                            alpha / 100) ** 3 + 1524.96 * (alpha / 100) ** 2 - 751.59 * (alpha / 100) + 116.56
+                else:
+                    print("Error in the number of bands provided")
+                    colour_spt, colour_shp = None, None
+                # normalisation of the tristimulus in 2 coordinates
+                x = X / (X + Y + Z)
+                y = Y / (X + Y + Z)
+                # hue angle:
+                alpha = (np.arctan2(y - 1 / 3, x - 1 / 3)) * 180 / np.pi % 360
+                # correction for multispectral information
+                alpha_corrected = alpha + delta(alpha)
+                cls = int(Raster._Forel_Ule_scale(alpha_corrected))
+            else:
+                cls = int(0)
+
+            # classifying only the valid pixels inside the polygon
+            values = np.where(valid_pixels, cls, 0)
+            # addition to avoid replacing values by cropping by other polygons
+            colour_spt[slices[0], slices[1]] += values.reshape((mask.shape))
+            # classification by polygon
+            colour_shp[i] = cls
+
+        return colour_spt, colour_shp
+
+    @staticmethod
+    def _Forel_Ule_scale(angle):
+        """
+        Calculates the Forel-Ule water colour scale, depending on the hue angle calculated from the Sentinel-2 MSI data,
+        based on the classification by Novoa et al. (2013)
+        Parameters
+        ----------
+        angles: the hue angle, in degrees
+
+        Returns
+        -------
+        The water colour class (1-21)
+        """
+        mapping = [(21.0471, 21), (24.4487, 20), (28.2408, 19), (32.6477, 18), (37.1698, 17), (42.3707, 16),
+                   (47.8847, 15), (53.4431, 14), (59.4234, 13), (64.9378, 12), (70.9617, 11), (78.1648, 10),
+                   (88.5017, 9), (99.5371, 8), (118.5208, 7), (147.4148, 6), (178.7020, 5), (202.8305, 4),
+                   (217.1473, 3), (224.8037, 2)]
+        score = lambda s: next((L for x, L in mapping if s < x), 1)
+
+        return(score(angle))
+
+
+    def chlorophylla(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0):
+        """
+        Function to calculate the chlorophyll-a concentration (chla) based on the optical water type (OWT)
+        The functions are the ones recomended by Carrea et al. (2023) and Neil et al. (2019, 2020), and are coded in
+        inversion_functions.py
+
+        Parameters
+        ----------
+        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
+        class_owt_spt: an array, with the same size as the input bands, with the classified pixels
+
+        Returns
+        -------
+        chla: an array, with the same size as the input bands, with the classified pixels
+        """
+        import getpak.inversion_functions as ifunc
+        chla = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float16')
+
+        # chla functions for each OWT
+        classes = [1, 4, 5, 6]
+        index = np.where(np.isin(class_owt_spt, classes))
+        if len(index[0]>0):
+            chla[index] = ifunc.functions['CHL_Gons']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                                                                          RedEdg1=rrs_dict['Rrs_B5'].values[index],
+                                                                           RedEdg3=rrs_dict['Rrs_B7'].values[index])
+        classes = [2, 7, 8, 11, 12]
+        index = np.where(np.isin(class_owt_spt, classes))
+        if len(index[0] > 0):
+            chla[index] = ifunc.functions['CHL_Gilerson']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                                                                          RedEdg1=rrs_dict['Rrs_B5'].values[index])
+        classes = [3, 9, 10, 13]
+        index = np.where(np.isin(class_owt_spt, classes))
+        if len(index[0] > 0):
+            chla[index] = ifunc.functions['CHL_OC2']['function'](Blue=rrs_dict['Rrs_B2'].values[index],
+                                                                          Green=rrs_dict['Rrs_B3'].values[index])
+
+        # removing espurious values
+        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
+            chla[chla >= upper_lim] = np.nan
+            chla[chla <= lower_lim] = np.nan
+
+        return chla
+
+    def turbidity(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0):
+        """
+        Function to calculate the turbidity (turb) based on the optical water type (OWT)
+        The functions are the ones recomended by Carrea et al. (2023)
+        Parameters
+        ----------
+        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
+        class_owt_spt: an array, with the same size as the input bands, with the classified pixels
+
+        Returns
+        -------
+        turb: an array, with the same size as the input bands, with the classified pixels
+        """
+        import getpak.inversion_functions as ifunc
+        turb = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float16')
+
+        # chla functions for each OWT
+        classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
+        index = np.where(np.isin(class_owt_spt, classes))
+        if len(index[0] > 0):
+            turb[index] = ifunc.functions['TURB_Dogliotti']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                                                                  Nir2=rrs_dict['Rrs_B8A'].values[index])
+
+        # removing espurious values
+        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
+            turb[turb >= upper_lim] = np.nan
+            turb[turb <= lower_lim] = np.nan
+
+        return turb
+
+    def spm(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0):
+        """
+        Function to calculate the suspended particulate matter (SPM) based on the optical water type (OWT)
+        The functions are the ones recomended by Carrea et al. (2023)
+        Parameters
+        ----------
+        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
+        class_owt_spt: an array, with the same size as the input bands, with the classified pixels
+
+        Returns
+        -------
+        spm: an array, with the same size as the input bands, with the classified pixels
+        """
+        import getpak.inversion_functions as ifunc
+        spm = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float16')
+
+        # chla functions for each OWT
+        classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
+        index = np.where(np.isin(class_owt_spt, classes))
+        if len(index[0] > 0):
+            spm[index] = ifunc.functions['SPM_S3']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                                                                  Nir2=rrs_dict['Rrs_B8A'].values[index])
+
+        # removing espurious values
+        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
+            spm[spm >= upper_lim] = np.nan
+            spm[spm <= lower_lim] = np.nan
+
+        return spm
 
 class GRS:
     """
@@ -427,7 +622,7 @@ class GRS:
     
     @staticmethod
     def get_grs_dict(grs_nc_file, grs_version='v15'):
-        '''
+        """
         Opens the GRS netCDF files using the xarray library and dask, returning a DataArray containing only the Rrs bands
         Parameters
         ----------
@@ -437,7 +632,7 @@ class GRS:
         Returns
         -------
         The xarray DataArray containing the 11 Rrs bands, named as 'Rrs_B*'
-        '''
+        """
         # list of bands
         bands = ['Rrs_B1', 'Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6',
                  'Rrs_B7', 'Rrs_B8', 'Rrs_B8A', 'Rrs_B11', 'Rrs_B12']
