@@ -89,14 +89,31 @@ class Utils:
         return idx
 
     @staticmethod
-    def walktalk(path2walk, fpattern='.nc', dir_is_file=False, badstring=None):
+    def walktalk(path2walk, fpattern='.nc', dir_is_file=False, unwanted_string=None):
+        '''
+
+        Parameters
+        ----------
+        path2walk: folder to scan for files
+        fpattern: the file pattern to look for inside the folders
+        dir_is_file: option to include the folders in the search, defaults to False
+        unwanted_string: a string to search for and remove from the list of files if present
+
+        Returns
+        -------
+        output_flist: list of files (and folders) matching the fpattern found inside the path2walk folder
+        '''
         output_flist = []
         for root, dirs, files in os.walk(path2walk, topdown=False):
             for name in (dirs if dir_is_file else files):
                 # check the file format
                 if name.endswith(fpattern):
+                    if isinstance(unwanted_string, str):
                     # check if it is not the file you want
-                    if not fnmatch.fnmatch(name, badstring):
+                        if not fnmatch.fnmatch(name, unwanted_string):
+                            f = Path(os.path.join(root, name))
+                            output_flist.append(f)
+                    else:
                         f = Path(os.path.join(root, name))
                         output_flist.append(f)
         print(f'{len(output_flist)} files found.')
