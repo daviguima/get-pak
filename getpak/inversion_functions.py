@@ -13,7 +13,52 @@
 import numpy as np
 
 
-# Below is an example extracted from Nechad et al. (2010)
+#### Chlorophyll-a
+# Gitelson
+def chl_gitelson(Red, RedEdg1, RedEdg2):
+    chl = 23.1 + 117.4 * (1 / Red - 1 / RedEdg1) * RedEdg2
+    return chl
+
+# Gitelson and Kondratyev, Dall'Olmo et al. (2003)
+def chl_gitelson2(Red, RedEdg1, a=61.324, b=-37.94):
+    chl = a * (RedEdg1 / Red) + b
+    return chl
+
+# OC2
+def chl_OC2(Blue, Green, a=0.2389, b=-1.9369, c=1.7627, d=-3.0777, e=-0.1054):
+    X = np.log10(Blue / Green)
+    chl = 10**(a + b*X + c*X**2 + d*X**3 + e*X**4)
+    return chl
+
+# 2-band ratio by Gilerson et al. (2010)
+def chl_gilerson2(Red, RedEdg1, a=35.75, b=1.124):
+    chl = (a * (RedEdg1 / Red) - 19.30)**b
+    return chl
+
+# 2-band semi-analytical by Gons et al. (2003, 2005)
+def chl_gons(Red, RedEdg1, RedEdg3, a=1.063, b=0.016, aw664=0.40, aw708=0.70):
+    bb = 1.61 * RedEdg3 / (0.082 - 0.6 * RedEdg3)
+    chl = ((RedEdg1 / Red) * (aw708 + bb) - aw664 - bb**a)/b
+    return chl
+
+# JM Hybride 1
+def chl_h1(Red, RedEdge1, RedEdge2):
+    res = RedEdge1 - Red  # B5 - B4
+    chl = np.zeros_like(res)
+    chl[res < 0] = 115.107 * RedEdge2[res < 0] * (1/Red[res < 0] - 1/RedEdge1[res < 0]) + 16.56
+    chl[res >= 0] = 115.794 * RedEdge2[res >= 0] * (1/Red[res >= 0] - 1/RedEdge1[res >= 0]) + 20.678
+    return chl
+
+# JM Hybride 2
+def chl_h2(Red, RedEdge1, RedEdge2):
+    res = RedEdge1 - Red  # B5 - B4
+    chl = np.zeros_like(res)
+    chl[res < 0] = 46.859 * RedEdge1[res < 0]/Red[res < 0] - 29.916
+    chl[res >= 0] = 115.794 * RedEdge2[res >= 0] * (1/Red[res >= 0] - 1/RedEdge1[res >= 0]) + 20.678
+    return chl
+
+#### SPM
+# Nechad et al. (2010)
 def nechad(Red, a=610.94, c=0.2324):
     spm = a * Red / (1 - (Red / c))
     return spm
@@ -47,35 +92,8 @@ def spm_s3(Red, Nir2, cutoff_value=0.027, cutoff_delta=0.007, low_params=None, h
     spm = (1 - transition_coef) * low + transition_coef * high
     return spm
 
-
-# Gitelson
-def chl_gitelson(Red, RedEdg1, RedEdg2):
-    chl = 23.1 + 117.4 * (1 / Red - 1 / RedEdg1) * RedEdg2
-    return chl
-
-
-# Gitelson and Kondratyev
-def chl_gitelson2(Red, RedEdg1):
-    chl = 61.324 * (RedEdg1 / Red) - 37.94
-    return chl
-
-# JM Hybride 1
-def chl_h1(Red, RedEdge1, RedEdge2):
-    res = RedEdge1 - Red  # B5 - B4
-    chl = np.zeros_like(res)
-    chl[res < 0] = 115.107 * RedEdge2[res < 0] * (1/Red[res < 0] - 1/RedEdge1[res < 0]) + 16.56
-    chl[res >= 0] = 115.794 * RedEdge2[res >= 0] * (1/Red[res >= 0] - 1/RedEdge1[res >= 0]) + 20.678
-    return chl
-
-# JM Hybride 2
-def chl_h2(Red, RedEdge1, RedEdge2):
-    res = RedEdge1 - Red  # B5 - B4
-    chl = np.zeros_like(res)
-    chl[res < 0] = 46.859 * RedEdge1[res < 0]/Red[res < 0] - 29.916
-    chl[res >= 0] = 115.794 * RedEdge2[res >= 0] * (1/Red[res >= 0] - 1/RedEdge1[res >= 0]) + 20.678
-    return chl
-
-# Turbidity (FNU) Dogliotti
+#### Turbidity (FNU)
+# Dogliotti
 def turb_dogliotti(Red, Nir2):
     """Switching semi-analytical-algorithm computes turbidity from red and NIR band
 
@@ -100,7 +118,8 @@ def turb_dogliotti(Red, Nir2):
     t_low[t_low > 4000] = 0
     return t_low
 
-# CDOM Brezonik et al. 2005
+#### CDOM
+# Brezonik et al. 2005
 def cdom_brezonik(Blue, RedEdg2):
 
 
@@ -129,7 +148,22 @@ functions = {
         'function': chl_gitelson2,
         'units': 'mg/m³'
     },
-    
+
+    'CHL_OC2': {
+        'function': chl_OC2,
+        'units': 'mg/m³'
+    },
+
+    'CHL_Gilerson': {
+        'function': chl_gilerson2,
+        'units': 'mg/m³'
+    },
+
+    'CHL_Gons': {
+    'function': chl_gons,
+    'units': 'mg/m³'
+    },
+
     'CHL_Hybrid1': {
         'function': chl_h1,
         'units': 'mg/m³'
