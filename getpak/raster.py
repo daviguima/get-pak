@@ -1,19 +1,20 @@
 import os
 import json
-import fiona
+from osgeo import gdal
 import numpy as np
 import rasterio
 import rasterio.mask
-import scipy.ndimage
+# import scipy.ndimage
 import importlib_resources
 import xarray as xr
-from dask.distributed import Client
+# from dask.distributed import Client
 
 from datetime import datetime
 from rasterstats import zonal_stats
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 
 from getpak.commons import Utils as u
+
 
 class Raster:
     """
@@ -46,23 +47,31 @@ class Raster:
         Function to classify the the OWT of pixels inside a shapefile (or a set of shapefiles)
 
     """
-    def __init__(self, parent_log=None):
-            if parent_log:
-                self.log = parent_log
-            else:
-                INSTANCE_TIME_TAG = datetime.now().strftime('%Y%m%dT%H%M%S')
-                logfile = os.path.join(os.getcwd(), 'getpak_raster_' + INSTANCE_TIME_TAG + '.log')
-            # Import CRS projection information from /data/s2_proj_ref.json
-            s2projdata = importlib_resources.files(__name__).joinpath('data/s2_proj_ref.json')
-            with s2projdata.open('rb') as fp:
-                byte_content = fp.read()
-            self.s2projgrid = json.loads(byte_content)
 
-            # Import OWT means for S2 MSI from /data/means_OWT_S2A_Spyrakos.json
-            means_owt = importlib_resources.files(__name__).joinpath('data/means_OWT_S2A_Spyrakos.json')
-            with means_owt.open('rb') as fp:
-                byte_content = fp.read()
-            self.owts = dict(json.loads(byte_content))
+    def __init__(self, parent_log=None):
+        if parent_log:
+            self.log = parent_log
+        else:
+            INSTANCE_TIME_TAG = datetime.now().strftime('%Y%m%dT%H%M%S')
+            logfile = os.path.join(os.getcwd(), 'getpak_raster_' + INSTANCE_TIME_TAG + '.log')
+        # Import CRS projection information from /data/s2_proj_ref.json
+        s2projdata = importlib_resources.files(__name__).joinpath('data/s2_proj_ref.json')
+        with s2projdata.open('rb') as fp:
+            byte_content = fp.read()
+        self.s2projgrid = json.loads(byte_content)
+
+        # Import OWT means for S2 MSI from /data/means_OWT_Spyrakos_S2A_B2-7.json
+        means_owt = importlib_resources.files(__name__).joinpath('data/means_OWT_Spyrakos_S2A_B1-7.json')
+        with means_owt.open('rb') as fp:
+            byte_content = fp.read()
+        self.owts_B1_7 = dict(json.loads(byte_content))
+
+        means_owt = importlib_resources.files(__name__).joinpath('data/means_OWT_Spyrakos_S2A_B2-7.json')
+        with means_owt.open('rb') as fp:
+            byte_content = fp.read()
+        self.owts_B2_7 = dict(json.loads(byte_content))
+
+        # raster
 
     @staticmethod
     def array2tiff(ndarray_data, str_output_file, transform, projection, no_data=-1, compression='COMPRESS=PACKBITS'):
@@ -90,13 +99,14 @@ class Raster:
                            crs=projection,
                            transform=transform,
                            nodata=no_data,
-                           options=['COMPRESS=PACKBITS']) as dst:
+                           options=[compression]) as dst:
             dst.write(ndarray_data, 1)
 
         pass
 
     @staticmethod
-    def array2tiff_gdal(ndarray_data, str_output_file, transform, projection, no_data=-1, compression='COMPRESS=PACKBITS'):
+    def array2tiff_gdal(ndarray_data, str_output_file, transform, projection, no_data=-1,
+                        compression='COMPRESS=PACKBITS'):
         """
         Given an input ndarray and the desired projection parameters, create a raster.tif using GDT_Float32.
 
@@ -129,7 +139,7 @@ class Raster:
         # Close the file https://gdal.org/tutorials/raster_api_tut.html#using-create
         outdata = None
         pass
-    
+
     @staticmethod
     def reproj(in_raster, out_raster, target_crs='EPSG:4326'):
         """
@@ -145,7 +155,6 @@ class Raster:
         """
         # Open the input raster file
         with rasterio.open(in_raster) as src:
-
             # Calculate the transformation parameters
             transform, width, height = calculate_default_transform(
                 src.crs, target_crs, src.width, src.height, *src.bounds)
@@ -161,7 +170,6 @@ class Raster:
 
             # Create the output raster file
             with rasterio.open(out_raster, 'w', **kwargs) as dst:
-
                 # Reproject the data
                 for i in range(1, src.count + 1):
                     reproject(
@@ -174,7 +182,7 @@ class Raster:
                         resampling=Resampling.nearest)
         print(f'Done: {out_raster}')
         pass
-    
+
     @staticmethod
     def shp_stats(tif_file, shp_poly, keep_spatial=False, statistics='count min mean max median std'):
         """
@@ -245,11 +253,50 @@ class Raster:
 
         return values, slices, mask_image
 
-    def sam(self, rrs, single=False):
+    @staticmethod
+    def extract_function_px(rasterio_rast, shapefiles, data_matrix, fun='median', min_px=6):
+        """
+        Given a numpy matrix of data with the size and projection of a TIFF file opened with rasterio and a polygon,
+        to extract the values of pixels for each shapefile and returns the values for the desired function
+
+        Parameters
+        ----------
+        rasterio_rast: a rasterio raster open with rasterio.open
+        shapefiles: set of polygons opened as geometry using fiona
+        data_matrix: a numpy array with the size and projection of rasterio_rast, with the values to extract
+        fun: the function to calculate over the data_matrix. Can be one of min, mean, max, median, and std
+        min_px: minimum number of pixels in each polygon to operate the classification
+
+        Returns
+        -------
+        values_shp: an array with the same length as the shapefiles, with the calculated function for each polygon
+        """
+
+        if fun == 'median':
+            calc = lambda x: np.nanmedian(x)
+        elif fun == 'mean':
+            calc = lambda x: np.nanmean(x)
+        values_shp = np.zeros((len(shapefiles)), dtype='float32')
+        for i, shape in enumerate(shapefiles):
+            # extracting the data_matrix by the shapefile
+            mask_image, _, window_image = rasterio.mask.raster_geometry_mask(rasterio_rast, [shape], crop=True)
+            slices = window_image.toslices()
+            values = data_matrix[slices[0], slices[1]][~mask_image]
+            # Verifying if there are enough pixels to calculate
+            valid_pixels = np.isnan(values) == False
+            if np.count_nonzero(valid_pixels) >= min_px:
+                values_shp[i] = calc(values)
+            else:
+                values_shp[i] = np.nan
+
+        return values_shp
+
+    def sam(self, rrs, single=False, mode='B1'):
         """
         Spectral Angle Mapper for OWT classification for a set of pixels
-        It calculates the angle between the Rrs of a set of pixels and those of the 13 OWT of inland waters (Spyrakos et al., 2018)
-        Input values are the values of the pixels from B2 to B7, the dict of the OWTs is already stored
+        It calculates the angle between the Rrs of a set of pixels and those of the 13 OWT of inland waters
+        (Spyrakos et al., 2018)
+        Input values are the values of the pixels from B1 or B2 (depends on mode) to B7, the dict of the OWTs is already stored
         Returns the spectral angle between the Rrs of the pixels and each OWT
         To classify pixels individually, set single=True
         ----------
@@ -257,65 +304,93 @@ class Raster:
         if single:
             E = rrs / rrs.sum()
         else:
-            med = np.nanmean(rrs, axis=1)
+            med = np.nanmedian(rrs, axis=1)
             E = med / med.sum()
         # norm of the vector
         nE = np.linalg.norm(E)
 
-        # Convert owts values to numpy array for vectorized computations
-        M = np.array([list(val.values()) for val in self.owts.values()])
+        # Convert OWT values to numpy array for vectorized computations
+        if mode == 'B1':
+            M = np.array([list(val.values()) for val in self.owts_B1_7.values()])
+        else:
+            M = np.array([list(val.values()) for val in self.owts_B2_7.values()])
         nM = np.linalg.norm(M, axis=1)
 
         # scalar product
         num = np.dot(M, E)
         den = nM * nE
 
-        angles = np.arccos(num / den) * 180 / np.pi
+        angles = np.arccos(num / den)
 
-        return int(np.argmin(angles) + 1)
+        return angles
 
-    def classify_owt_px(self, rrs_dict, bands=['Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7']):
+    def classify_owt_px(self, rrs_dict, B1=True):
         """
         Function to classify the OWT of each pixel
 
         Parameters
         ----------
         rrs_dict: a xarray Dataset containing the Rrs bands
-        bands: an array containing the bands (2 to 7) of the rrs_dict to be extracted
+        B1: boolean to whether or not use Band 1 when using Sentinel-2 data
 
         Returns
         -------
-        class_px: an array, with the same size as the input bands, with the pixels classified
+        class_px: an array, with the same size as the input bands, with the pixels classified with the smallest SAM
+        angles: a 2-dimensional array, where the first dimension is the number of valid pixels in the rrs_dict, and
+        the second dimension is the number of OWTs. The values are the spectral angles between the Rrs and the mean Rrs
+        of each OWT, in each pixel
+
         """
+        if B1:
+            bands = ['Rrs_B1', 'Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7']
+            mode = 'B1'
+        else:
+            bands = ['Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7']
+            mode = 'B2'
         # Drop the variables that won't be used in the classification
-        variables_to_drop = [var for var in rrs_dict.variables if var not in bands]
+        variables_to_drop = [var for var in rrs_dict.variables if var not in bands + ['x', 'y']]
         rrs = rrs_dict.drop_vars(variables_to_drop)
         # Find non-NaN values
-        nzero = np.where(~np.isnan(rrs[bands[0]].values))
+        nzero = np.where(~np.isnan(rrs[bands[-1]].values))
         # array of OWT class for each pixel
-        class_px = np.zeros_like(rrs[bands[0]], dtype='uint8')
+        class_px = np.zeros_like(rrs[bands[-1]], dtype='uint8')
         # array of angles to limit the loop
-        angles = np.zeros((len(nzero[0])), dtype='uint8')
+        angles = np.zeros((len(nzero[0]), 13), dtype='float16')
+
+        # creating a new Band 1 by undoing the upsampling of GRS, keeping only the pixels entirely inside water
+        if B1:
+            aux = rrs['Rrs_B1'].coarsen(x=3, y=3).mean(skipna=False).interp(x=rrs.x, y=rrs.y, method='nearest').values
+            rrs['Rrs_B160m'] = (('x', 'y'), aux)
+            bands = ['Rrs_B160m', 'Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7']
+
         # loop over each nonzero value in the rrs_dict
         pix = np.zeros((len(nzero[0]), len(bands)))
         for i in range(len(bands)):
             pix[:, i] = rrs[bands[i]].values[nzero]
         for i in range(len(nzero[0])):
-            angles[i] = self.sam(rrs=pix[i, :], single=True)
-        class_px[nzero] = angles
+            angles[i, :] = self.sam(rrs=pix[i, :], mode=mode, single=True)
 
-        return class_px
+        # if B1 is being used, there won't be any classification for the pixels without values in B1, so they have to be
+        # classified using only bands 2 to 7
+        if B1:
+            nodata = np.where(np.isnan(angles[:, 0]))[0]
+            for i in range(len(nodata)):
+                angles[nodata[i], :] = self.sam(rrs=pix[nodata[i], 1:], mode='B2', single=True)
+        class_px[nzero] = np.argmin(angles, axis=1) + 1
 
-    def classify_owt(self, rasterio_rast, shapefiles, rrs_dict, bands=['Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7'], min_px=6):
+        return class_px, angles
+
+    def classify_owt(self, rasterio_rast, shapefiles, rrs_dict, B1=True, min_px=6):
         """
         Function to classify the the OWT of pixels inside a shapefile (or a set of shapefiles)
 
         Parameters
         ----------
         rasterio_rast: a rasterio raster open with rasterio.open
-        shapefiles: a polygon (or set of polygons), usually of waterbodies to be classified, opened as geometry using fiona
+        shapefiles: a polygon (or set of polygons), usually of waterbodies to be classified, opened as geometry
+            using fiona
         rrs_dict: a xarray Dataset containing the Rrs bands
-        bands: an array containing the bands of the rrs_dict to be extracted
+        B1: boolean to use Band 1 when using Sentinel-2 data
         min_px: minimum number of pixels in each polygon to operate the classification
 
         Returns
@@ -323,6 +398,13 @@ class Raster:
         class_spt: an array, with the same size as the input bands, with the classified pixels
         class_shp: an array with the same length as the shapefiles, with a OWT class for each polygon
         """
+        # checking if B1 will be used in the classification
+        if B1:
+            bands = ['Rrs_B1', 'Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7']
+            mode = 'B1'
+        else:
+            bands = ['Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7']
+            mode = 'B2'
         class_spt = np.zeros(rrs_dict[bands[0]].shape, dtype='int32')
         class_shp = np.zeros((len(shapefiles)), dtype='int32')
         for i, shape in enumerate(shapefiles):
@@ -330,88 +412,455 @@ class Raster:
             # Verifying if there are more pixels than the minimum
             valid_pixels = np.isnan(values[0]) == False
             if np.count_nonzero(valid_pixels) >= min_px:
-                angle = self.sam(values)
+                angle = int(np.argmin(self.sam(values, mode=mode)) + 1)
             else:
                 angle = int(0)
 
             # classifying only the valid pixels inside the polygon
             values = np.where(valid_pixels, angle, 0)
             # adding to avoid replacing values of cropping by other polygons
-            class_spt[slices[0], slices[1]] += values.reshape((mask.shape))
+            class_spt[slices[0], slices[1]] += values.reshape(mask.shape)
             # classification by polygon
             class_shp[i] = angle
 
         return class_spt.astype('uint8'), class_shp.astype('uint8')
 
-    def water_colour(self, rasterio_rast, shapefiles, rrs_dict, bands=['Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5'],  min_px=6):
+    def classify_owt_weights(self, class_px, angles, n=3, remove_cls_one=True):
         """
-        Function to calculate the water colour based on the Forel-Ule scale, using the bands of Sentinel-2 MSI, with the
-        coefficients derived by linear correlation by van der Woerd and Wernand (2018). The different combinations of S2
-        bands (10, 20 or 60 m resolution) in the visible spectrum can be used, with the default being at 20 m.
+        Function to attribute weights to the n-th most important OWTs, based on the squared cossine of SAM
+        The weights are used for calculating weighted means of the water quality parameters, in order to smooth the
+        spatial differences between the pixels, and also to remove possible outliers generated by some models
+        For more information on this approach, please refer to Moore et al. (2001) and Carrea et al. (2023)
+
+        This function uses the results of classify_owt_px as input data
 
         Parameters
         ----------
-        rasterio_rast: a rasterio raster open with rasterio.open
-        shapefiles: a polygon (or set of polygons), usually of waterbodies to be classified, opened as geometry using fiona
+        class_px: an array, with the same size as the input bands, with the pixels classified with the smallest SAM
+        angles: a 2-dimensional array, where the first dimension is the number of valid pixels in the rrs_dict, and
+        the second dimension is the number of OWTs. The values are the spectral angles between the Rrs and the mean Rrs
+        of each OWT, in each pixel
+        n = the number of dominant classes to be used to generate the weights
+        remove_cls_one: logical, remove the pixels classified as OWT 1?
+
+        Returns
+        -------
+        class_px: an array, with the same size as the input bands, with the pixels classified with the smallest SAM
+        angles
+        """
+        # creating the variables of weights and classes for each pixel, depending on the desired number of classes to
+        # be used
+        owt_weights = np.zeros((n, *class_px.shape), dtype='float32')
+        owt_classes = np.zeros((n, *class_px.shape), dtype='float32')
+
+        # finding where there is no valid pixels in the reflectance data
+        nzero = np.where(class_px != 0)
+
+        # Create an array of indices
+        cos_sqrt = np.cos(angles) ** 2
+        indices = np.argsort(-cos_sqrt, axis=1)
+        weights = np.take_along_axis(cos_sqrt, indices[:, 0:n:], axis=1)
+
+        # Assigning values to the matrices
+        for i in range(n):
+            owt_weights[i, nzero[0], nzero[1]] = weights[:, i]
+            owt_classes[i, nzero[0], nzero[1]] = indices[:, i] + 1  # summing one due to positioning starting in 1
+
+        # removing OWT 1:
+        if remove_cls_one == True:
+            ones = np.where(indices[:, 0] == 0)[0]
+            owt_weights[:, nzero[0][ones], nzero[1][ones]] = np.nan
+
+        # # removing the zeros to avoid division by 0
+        # owt_weights[np.where(owt_weights == 0)] = np.nan
+        # owt_classes[np.where(owt_classes == 0)] = np.nan
+
+        return owt_classes, owt_weights
+
+    def cdom(self, rrs_dict, class_owt_spt, upper_lim=50, lower_lim=0):
+        """
+        Function to calculate the coloured dissolved organic matter (CDOM) based on the optical water type (OWT)
+
+        Parameters
+        ----------
+        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
+        class_owt_spt: an array, with the same size as the input bands, with the OWT pixels
+
+        Returns
+        -------
+        cdom: an array, with the same size as the input bands, with the modeled values
+        """
+        import getpak.inversion_functions as ifunc
+        cdom = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float32')
+
+        # create a matrix for the outliers
+        if not hasattr(self, 'out'):
+            self.out = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='uint8')
+
+        # spm functions for each OWT
+        classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
+        index = np.where(np.isin(class_owt_spt, classes))
+        if len(index[0] > 0):
+            cdom[index] = ifunc.functions['CDOM_Brezonik']['function'](Blue=rrs_dict['Rrs_B2'].values[index],
+                                                                       RedEdg2=rrs_dict['Rrs_B6'].values[index])
+
+        # removing espurious values
+        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
+            out = np.where((cdom < lower_lim) | (cdom > upper_lim))
+            cdom[out] = np.nan
+            self.out[out] = 1
+
+        out = np.where((cdom == 0) | np.isinf(cdom))
+        cdom[out] = np.nan
+
+        return cdom
+
+    def chlorophylla(self, rrs_dict, class_owt_spt, limits=True, alg='owt'):
+        """
+        Function to calculate the chlorophyll-a concentration (chla) based on the optical water type (OWT)
+        The functions are the ones recomended by Carrea et al. (2023) and Neil et al. (2019, 2020), and are coded in
+        inversion_functions.py
+
+        Parameters
+        ----------
+        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
+        class_owt_spt: an array, with the same size as the input bands, with the OWT pixels
+        alg: one the the following algorithms available: owt to use the methodology based on OWT, or gons
+
+        Returns
+        -------
+        chla: an array, with the same size as the input bands, with the modeled values
+        """
+        import getpak.inversion_functions as ifunc
+        chla = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float32')
+
+        # create a matrix for the outliers if it doesn't exist
+        if not hasattr(self, 'out'):
+            self.out = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='uint8')
+
+        if alg == 'owt':
+            # chla functions for each OWT
+            # for class 1, using the coefficients calibrated by Neil et al. (2020) for the OWT 1
+            # classes = [1]
+            # index = np.where(np.isin(class_owt_spt, classes))
+            # if len(index[0] > 0):
+            #     chla[index] = ifunc.functions['CHL_Gurlin']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+            #                                                             RedEdg1=rrs_dict['Rrs_B5'].values[index],
+            #                                                             a=86.09, b=-517.5, c=886.7)
+            #     if limits:
+            #         lims = [10, 1000]
+            #         out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
+            #         chla[index[0][out], index[1][out]] = np.nan
+            #         self.out[index[0][out], index[1][out]] += 1
+
+            classes = [1, 6, 10]
+            index = np.where(np.isin(class_owt_spt, classes))
+            if len(index[0] > 0):
+                chla[index] = ifunc.functions['CHL_Gons']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                                                                      RedEdg1=rrs_dict['Rrs_B5'].values[index],
+                                                                      RedEdg3=rrs_dict['Rrs_B7'].values[index],
+                                                                      aw665=0.425, aw708=0.704)
+                if limits:
+                    lims = [1, 250]
+                    out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
+                    chla[index[0][out], index[1][out]] = np.nan
+                    self.out[index[0][out], index[1][out]] += 1
+
+            classes = [2, 4, 5, 12]
+            index = np.where(np.isin(class_owt_spt, classes))
+            if len(index[0] > 0):
+                chla[index] = ifunc.functions['CHL_NDCI']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                                                                           RedEdg1=rrs_dict['Rrs_B5'].values[index])
+                if limits:
+                    lims = [5, 250]
+                    out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
+                    chla[index[0][out], index[1][out]] = np.nan
+                    self.out[index[0][out], index[1][out]] += 1
+
+            # for class 2 and 12, when values of NDCI are >20, use Gilerson instead
+            classes = [2, 12]
+            conditions = (np.isin(class_owt_spt, classes)) & (chla > 20)
+            index = np.where(conditions)
+            if len(index[0] > 0):
+                chla[index] = ifunc.functions['CHL_Gilerson2']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                                                                      RedEdg1=rrs_dict['Rrs_B5'].values[index])
+                if limits:
+                    lims = [5, 250]
+                    out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
+                    chla[index[0][out], index[1][out]] = np.nan
+                    self.out[index[0][out], index[1][out]] += 1
+
+            classes = [7, 8, 11]
+            index = np.where(np.isin(class_owt_spt, classes))
+            if len(index[0] > 0):
+                chla[index] = ifunc.functions['CHL_Gilerson2']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                                                                      RedEdg1=rrs_dict['Rrs_B5'].values[index])
+                if limits:
+                    lims = [5, 250]
+                    out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
+                    chla[index[0][out], index[1][out]] = np.nan
+                    self.out[index[0][out], index[1][out]] += 1
+
+            # classes = []
+            # index = np.where(np.isin(class_owt_spt, classes))
+            # if len(index[0] > 0):
+            #     chla[index] = ifunc.functions['CHL_Gilerson3']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+            #                                                                RedEdg1=rrs_dict['Rrs_B5'].values[index],
+            #                                                                RedEdg2=rrs_dict['Rrs_B6'].values[index])
+            #     if limits:
+            #         lims = [10, 1000]
+            #         out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
+            #         chla[index[0][out], index[1][out]] = np.nan
+            #         self.out[index[0][out], index[1][out]] += 1
+
+            classes = [3]
+            index = np.where(np.isin(class_owt_spt, classes))
+            if len(index[0] > 0):
+                chla[index] = ifunc.functions['CHL_OC2']['function'](Blue=rrs_dict['Rrs_B2'].values[index],
+                                                                     Green=rrs_dict['Rrs_B3'].values[index],
+                                                                     a=0.1098, b=-0.755, c=-14.12, d=-117, e=-17.76)
+                if limits:
+                    lims = [0.01, 50]
+                    out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
+                    chla[index[0][out], index[1][out]] = np.nan
+                    self.out[index[0][out], index[1][out]] += 1
+
+            classes = [9]
+            index = np.where(np.isin(class_owt_spt, classes))
+            if len(index[0] > 0):
+                chla[index] = ifunc.functions['CHL_OC2']['function'](Blue=rrs_dict['Rrs_B2'].values[index],
+                                                                     Green=rrs_dict['Rrs_B3'].values[index],
+                                                                     a=0.0536, b=7.308, c=116.2, d=412.4, e=463.5)
+                if limits:
+                    lims = [0.01, 50]
+                    out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
+                    chla[index[0][out], index[1][out]] = np.nan
+                    self.out[index[0][out], index[1][out]] += 1
+
+            classes = [13]
+            index = np.where(np.isin(class_owt_spt, classes))
+            if len(index[0] > 0):
+                chla[index] = ifunc.functions['CHL_OC2']['function'](Blue=rrs_dict['Rrs_B2'].values[index],
+                                                                     Green=rrs_dict['Rrs_B3'].values[index],
+                                                                     a=-5020, b=2.9e+04, c=-6.1e+04, d=5.749e+04, e=-2.026e+04)
+                if limits:
+                    lims = [0.01, 50]
+                    out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
+                    chla[index[0][out], index[1][out]] = np.nan
+                    self.out[index[0][out], index[1][out]] += 1
+        else:
+            chla = ifunc.functions['CHL_Gons']['function'](Red=rrs_dict['Rrs_B4'].values,
+                                                                      RedEdg1=rrs_dict['Rrs_B5'].values,
+                                                                      RedEdg3=rrs_dict['Rrs_B7'].values)
+            if limits:
+                lims = [1, 250]
+                out = np.where((chla < lims[0]) | (chla > lims[1]))
+                chla[out] = np.nan
+                self.out[out] += 1
+
+        # removing espurious values and zeros
+        out = np.where((chla == 0) | np.isinf(chla))
+        chla[out] = np.nan
+
+        return chla
+
+    def turbidity(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0, alg='Dogliotti'):
+        """
+        Function to calculate the turbidity (turb) based on the optical water type (OWT)
+        Parameters
+        ----------
+        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
+        class_owt_spt: an array, with the same size as the input bands, with the OWT pixels
+        alg: one the the following algorithms available: Dogliotti or Conde
+
+        Returns
+        -------
+        turb: an array, with the same size as the input bands, with the modeled values
+        """
+        import getpak.inversion_functions as ifunc
+        turb = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float32')
+
+        # create a matrix for the outliers
+        if not hasattr(self, 'out'):
+            self.out = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='uint8')
+
+        # turbidity functions for each OWT
+        classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
+        index = np.where(np.isin(class_owt_spt, classes))
+        if len(index[0] > 0):
+            if alg == 'Dogliotti':
+                turb[index] = ifunc.functions['TURB_Dogliotti_S2']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                                                                            Nir2=rrs_dict['Rrs_B8A'].values[index])
+            elif alg == 'Conde':
+                turb[index] = ifunc.functions['TURB_Conde']['function'](Red=rrs_dict['Rrs_B4'].values[index])
+
+        # removing espurious values and zeros
+        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
+            out = np.where((turb < lower_lim) | (turb > upper_lim))
+            turb[out] = np.nan
+            self.out[out] = 1
+
+        out = np.where((turb == 0) | np.isinf(turb))
+        turb[out] = np.nan
+
+        return turb
+
+    def spm(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0, alg='Hybrid'):
+        """
+        Function to calculate the suspended particulate matter (SPM) based on the optical water type (OWT)
+
+        Parameters
+        ----------
+        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
+        class_owt_spt: an array, with the same size as the input bands, with the OWT pixels
+        alg: one the the following algorithms available: Hybrid or Nechad
+
+        Returns
+        -------
+        spm: an array, with the same size as the input bands, with the modeled values
+        """
+        import getpak.inversion_functions as ifunc
+        spm = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float32')
+
+        # create a matrix for the outliers
+        if not hasattr(self, 'out'):
+            self.out = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='uint8')
+
+        # spm functions for each OWT
+        classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
+        index = np.where(np.isin(class_owt_spt, classes))
+        if len(index[0] > 0):
+            if alg == 'Hybrid':
+                spm[index] = ifunc.functions['SPM_S3']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                                                                   Nir2=rrs_dict['Rrs_B8A'].values[index])
+            elif alg == 'Nechad':
+                spm[index] = ifunc.functions['SPM_Nechad']['function'](Red=rrs_dict['Rrs_B4'].values[index])
+
+        # removing espurious values and zeros
+        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
+            out = np.where((spm < lower_lim) | (spm > upper_lim))
+            spm[out] = np.nan
+            self.out[out] = 1
+
+        out = np.where((spm == 0) | np.isinf(spm))
+        spm[out] = np.nan
+
+        return spm
+
+    def secchi_dd(self, rrs_dict, class_owt_spt, upper_lim=50, lower_lim=0):
+        """
+        Function to calculate the Secchi disk depth (SPM) based on the optical water type (OWT)
+
+        Parameters
+        ----------
+        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
+        class_owt_spt: an array, with the same size as the input bands, with the OWT pixels
+
+        Returns
+        -------
+        secchi: an array, with the same size as the input bands, with the modeled values
+        """
+        import getpak.inversion_functions as ifunc
+        secchi = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float32')
+
+        # create a matrix for the outliers
+        if not hasattr(self, 'out'):
+            self.out = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='uint8')
+
+        # spm functions for each OWT
+        classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
+        index = np.where(np.isin(class_owt_spt, classes))
+        if len(index[0] > 0):
+            secchi[index] = ifunc.functions['SDD_Lee']['function'](Red=rrs_dict['Rrs_B4'].values[index])
+
+        # removing espurious values and zeros
+        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
+            out = np.where((secchi < lower_lim) | (secchi > upper_lim))
+            secchi[out] = np.nan
+            self.out[out] = 1
+
+        out = np.where((secchi == 0) | np.isinf(secchi))
+        secchi[out] = np.nan
+
+        return secchi
+
+    @staticmethod
+    def water_colour(rrs_dict, bands=['Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5']):
+        """
+        Function to calculate the water colour of each pixel based on the Forel-Ule scale, using the bands of Sentinel-2
+        MSI, with coefficients derived by linear correlation by van der Woerd and Wernand (2018). The different
+        combinations of S2 bands (10, 20 or 60 m resolution) in the visible spectrum can be used, with the default
+        being at 20 m.
+
+        Parameters
+        ----------
         rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
         bands: an array containing the bands of the rrs_dict to be extracted, in order from blue to red edge
-        min_px: minimum number of pixels in each polygon to operate the classification
 
         Returns
         -------
         colour: an array, with the same size as the input bands, with the classified pixels
-        colour_spt: an array with the same length as the shapefiles, with the mean colour (angle) for each polygon
         """
-        colour_spt = np.zeros(rrs_dict[bands[0]].shape, dtype='float16')
-        colour_shp = np.zeros((len(shapefiles)), dtype='float16')
+        # Drop the variables that won't be used in the classification
+        variables_to_drop = [var for var in rrs_dict.variables if var not in bands]
+        rrs = rrs_dict.drop_vars(variables_to_drop)
+        # Find non-NaN values
+        nzero = np.where(~np.isnan(rrs[bands[0]].values))
+        # array of classes to limit the loop
+        classes = np.zeros((len(nzero[0])), dtype='uint8')
+        # array of colour class for each pixel
+        colour = np.zeros_like(rrs[bands[0]], dtype='uint8')
 
-        for i, shape in enumerate(shapefiles):
-            values, slices, mask = self.extract_px(rasterio_rast, shape, rrs_dict, bands)
-            # Verifying if there are more pixels than the minimum
-            valid_pixels = np.isnan(values[0]) == False
-            if np.count_nonzero(valid_pixels) >= min_px:
-                med = np.nanmean(values, axis=1)
-                # calculation of the CIE tristimulus (no intercepts):
-                if len(bands) == 3:
-                    X = 12.040 * med[0] + 53.696 * med[1] + 32.087 * med[2]
-                    Y = 23.122 * med[0] + 65.702 * med[1] + 16.830 * med[2]
-                    Z = 61.055 * med[0] + 1.778 * med[1] + 0.015 * med[2]
-                    delta = lambda x: -164.83 * (alpha / 100) ** 5 + 1139.90 * (alpha / 100) ** 4 - 3006.04 * (
-                            alpha / 100) ** 3 + 3677.75 * (alpha / 100) ** 2 - 1979.71 * (alpha / 100) + 371.38
-                else if len(bands) == 4:
-                    X = 12.040 * med[0] + 53.696 * med[1] + 32.028 * med[2] + 0.529 * med[3]
-                    Y = 23.122 * med[0] + 65.702 * med[1] + 16.808 * med[2] + 0.192 * med[3]
-                    Z = 61.055 * med[0] + 1.778 * med[1] + 0.015 * med[2] + 0.000 * med[3]
-                    delta = lambda x : -161.23 * (alpha / 100) ** 5 + 1117.08 * (alpha / 100) ** 4 - 2950.14 * (
-                            alpha / 100) ** 3 + 3612.17 * (alpha / 100) ** 2 - 1943.57 * (alpha / 100) + 364.28
-                else if len(bands) == 5:
-                    X = 11.756 * med[0] + 6.423 * med[1] + 53.696 * med[2] + 32.028 * med[3] + 0.529 * med[4]
-                    Y = 1.744 * med[0] + 22.289 * med[1] + 65.702 * med[2] + 16.808 * med[3] + 0.192 * med[4]
-                    Z = 62.696 * med[0] + 31.101 * med[1] + 1.778 * med[2] + 0.015 * med[3] + 0.000 * med[4]
-                    delta = lambda x: -65.74 * (alpha / 100) ** 5 + 477.16 * (alpha / 100) ** 4 - 1279.99 * (
-                            alpha / 100) ** 3 + 1524.96 * (alpha / 100) ** 2 - 751.59 * (alpha / 100) + 116.56
-                else:
-                    print("Error in the number of bands provided")
-                    colour_spt, colour_shp = None, None
-                # normalisation of the tristimulus in 2 coordinates
-                x = X / (X + Y + Z)
-                y = Y / (X + Y + Z)
-                # hue angle:
-                alpha = (np.arctan2(y - 1 / 3, x - 1 / 3)) * 180 / np.pi % 360
-                # correction for multispectral information
-                alpha_corrected = alpha + delta(alpha)
-                cls = int(Raster._Forel_Ule_scale(alpha_corrected))
-            else:
-                cls = int(0)
+        # calculation of the CIE tristimulus (no intercepts):
+        # B2 to B4
+        if len(bands) == 3:
+            X = (12.040 * rrs[bands[0]].values[nzero] + 53.696 * rrs[bands[1]].values[nzero] +
+                 32.087 * rrs[bands[2]].values[nzero])
+            Y = (23.122 * rrs[bands[0]].values[nzero] + 65.702 * rrs[bands[1]].values[nzero] +
+                 16.830 * rrs[bands[2]].values[nzero])
+            Z = (61.055 * rrs[bands[0]].values[nzero] + 1.778 * rrs[bands[1]].values[nzero] +
+                 0.015 * rrs[bands[2]].values[nzero])
+            delta = lambda d: -164.83 * (alpha / 100) ** 5 + 1139.90 * (alpha / 100) ** 4 - 3006.04 * (
+                    alpha / 100) ** 3 + 3677.75 * (alpha / 100) ** 2 - 1979.71 * (alpha / 100) + 371.38
+        # B2 to B5
+        elif len(bands) == 4:
+            X = (12.040 * rrs[bands[0]].values[nzero] + 53.696 * rrs[bands[1]].values[nzero] +
+                 32.028 * rrs[bands[2]].values[nzero] + 0.529 * rrs[bands[3]].values[nzero])
+            Y = (23.122 * rrs[bands[0]].values[nzero] + 65.702 * rrs[bands[1]].values[nzero] +
+                 16.808 * rrs[bands[2]].values[nzero] + 0.192 * rrs[bands[3]].values[nzero])
+            Z = (61.055 * rrs[bands[0]].values[nzero] + 1.778 * rrs[bands[1]].values[nzero] +
+                 0.015 * rrs[bands[2]].values[nzero] + 0.000 * rrs[bands[3]].values[nzero])
+            delta = lambda d: -161.23 * (alpha / 100) ** 5 + 1117.08 * (alpha / 100) ** 4 - 2950.14 * (
+                    alpha / 100) ** 3 + 3612.17 * (alpha / 100) ** 2 - 1943.57 * (alpha / 100) + 364.28
+        # B1 to B5
+        elif len(bands) == 5:
+            X = (11.756 * rrs[bands[0]].values[nzero] + 6.423 * rrs[bands[1]].values[nzero] +
+                 53.696 * rrs[bands[2]].values[nzero] + 32.028 * rrs[bands[3]].values[nzero] +
+                 0.529 * rrs[bands[4]].values[nzero])
+            Y = (1.744 * rrs[bands[0]].values[nzero] + 22.289 * rrs[bands[1]].values[nzero] +
+                 65.702 * rrs[bands[2]].values[nzero] + 16.808 * rrs[bands[3]].values[nzero] +
+                 0.192 * rrs[bands[4]].values[nzero])
+            Z = (62.696 * rrs[bands[0]].values[nzero] + 31.101 * rrs[bands[1]].values[nzero] +
+                 1.778 * rrs[bands[2]].values[nzero] + 0.015 * rrs[bands[3]].values[nzero] +
+                 0.000 * rrs[bands[4]].values[nzero])
+            delta = lambda d: -65.74 * (alpha / 100) ** 5 + 477.16 * (alpha / 100) ** 4 - 1279.99 * (
+                    alpha / 100) ** 3 + 1524.96 * (alpha / 100) ** 2 - 751.59 * (alpha / 100) + 116.56
+        else:
+            print("Error in the number of bands provided")
+            colour = None
+        # normalisation of the tristimulus in 2 coordinates
+        x = X / (X + Y + Z)
+        y = Y / (X + Y + Z)
+        # hue angle:
+        alpha = (np.arctan2(y - 1 / 3, x - 1 / 3)) * 180 / np.pi % 360
+        # correction for multispectral information
+        alpha_corrected = alpha + delta(alpha)
+        for i in range(len(nzero[0])):
+            classes[i] = int(Raster._Forel_Ule_scale(alpha_corrected[i]))
+        # adding the classes to the matrix
+        colour[nzero] = classes
 
-            # classifying only the valid pixels inside the polygon
-            values = np.where(valid_pixels, cls, 0)
-            # addition to avoid replacing values by cropping by other polygons
-            colour_spt[slices[0], slices[1]] += values.reshape((mask.shape))
-            # classification by polygon
-            colour_shp[i] = cls
-
-        return colour_spt, colour_shp
+        return colour
 
     @staticmethod
     def _Forel_Ule_scale(angle):
@@ -420,7 +869,7 @@ class Raster:
         based on the classification by Novoa et al. (2013)
         Parameters
         ----------
-        angles: the hue angle, in degrees
+        angle: the hue angle, in degrees
 
         Returns
         -------
@@ -432,111 +881,7 @@ class Raster:
                    (217.1473, 3), (224.8037, 2)]
         score = lambda s: next((L for x, L in mapping if s < x), 1)
 
-        return(score(angle))
-
-
-    def chlorophylla(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0):
-        """
-        Function to calculate the chlorophyll-a concentration (chla) based on the optical water type (OWT)
-        The functions are the ones recomended by Carrea et al. (2023) and Neil et al. (2019, 2020), and are coded in
-        inversion_functions.py
-
-        Parameters
-        ----------
-        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
-        class_owt_spt: an array, with the same size as the input bands, with the classified pixels
-
-        Returns
-        -------
-        chla: an array, with the same size as the input bands, with the classified pixels
-        """
-        import getpak.inversion_functions as ifunc
-        chla = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float16')
-
-        # chla functions for each OWT
-        classes = [1, 4, 5, 6]
-        index = np.where(np.isin(class_owt_spt, classes))
-        if len(index[0]>0):
-            chla[index] = ifunc.functions['CHL_Gons']['function'](Red=rrs_dict['Rrs_B4'].values[index],
-                                                                          RedEdg1=rrs_dict['Rrs_B5'].values[index],
-                                                                           RedEdg3=rrs_dict['Rrs_B7'].values[index])
-        classes = [2, 7, 8, 11, 12]
-        index = np.where(np.isin(class_owt_spt, classes))
-        if len(index[0] > 0):
-            chla[index] = ifunc.functions['CHL_Gilerson']['function'](Red=rrs_dict['Rrs_B4'].values[index],
-                                                                          RedEdg1=rrs_dict['Rrs_B5'].values[index])
-        classes = [3, 9, 10, 13]
-        index = np.where(np.isin(class_owt_spt, classes))
-        if len(index[0] > 0):
-            chla[index] = ifunc.functions['CHL_OC2']['function'](Blue=rrs_dict['Rrs_B2'].values[index],
-                                                                          Green=rrs_dict['Rrs_B3'].values[index])
-
-        # removing espurious values
-        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
-            chla[chla >= upper_lim] = np.nan
-            chla[chla <= lower_lim] = np.nan
-
-        return chla
-
-    def turbidity(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0):
-        """
-        Function to calculate the turbidity (turb) based on the optical water type (OWT)
-        The functions are the ones recomended by Carrea et al. (2023)
-        Parameters
-        ----------
-        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
-        class_owt_spt: an array, with the same size as the input bands, with the classified pixels
-
-        Returns
-        -------
-        turb: an array, with the same size as the input bands, with the classified pixels
-        """
-        import getpak.inversion_functions as ifunc
-        turb = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float16')
-
-        # chla functions for each OWT
-        classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
-        index = np.where(np.isin(class_owt_spt, classes))
-        if len(index[0] > 0):
-            turb[index] = ifunc.functions['TURB_Dogliotti']['function'](Red=rrs_dict['Rrs_B4'].values[index],
-                                                                  Nir2=rrs_dict['Rrs_B8A'].values[index])
-
-        # removing espurious values
-        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
-            turb[turb >= upper_lim] = np.nan
-            turb[turb <= lower_lim] = np.nan
-
-        return turb
-
-    def spm(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0):
-        """
-        Function to calculate the suspended particulate matter (SPM) based on the optical water type (OWT)
-        The functions are the ones recomended by Carrea et al. (2023)
-        Parameters
-        ----------
-        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
-        class_owt_spt: an array, with the same size as the input bands, with the classified pixels
-
-        Returns
-        -------
-        spm: an array, with the same size as the input bands, with the classified pixels
-        """
-        import getpak.inversion_functions as ifunc
-        spm = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float16')
-
-        # chla functions for each OWT
-        classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
-        index = np.where(np.isin(class_owt_spt, classes))
-        if len(index[0] > 0):
-            spm[index] = ifunc.functions['SPM_S3']['function'](Red=rrs_dict['Rrs_B4'].values[index],
-                                                                  Nir2=rrs_dict['Rrs_B8A'].values[index])
-
-        # removing espurious values
-        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
-            spm[spm >= upper_lim] = np.nan
-            spm[spm <= lower_lim] = np.nan
-
-        return spm
+        return score(angle)
 
 class GRS:
     """
@@ -549,9 +894,9 @@ class GRS:
     """
 
     def __init__(self, parent_log=None):
-            if parent_log:
-                self.log = parent_log
-    
+        if parent_log:
+            self.log = parent_log
+
     @staticmethod
     def metadata(grs_file_entry):
         """
@@ -559,7 +904,7 @@ class GRS:
         
         Parameters
         ----------
-        @param grs_file_entry (str or pathlike obj): path that leads to the GRS.nc file.
+        @param grs_file_entry: str or pathlike obj that leads to the GRS.nc file.
                 
         @return: metadata (dict) containing the extracted info, available keys are:
             input_file, basename, mission, prod_lvl, str_date, pydate, year,
@@ -590,18 +935,18 @@ class GRS:
         metadata = {}
         basefile = os.path.basename(grs_file_entry)
         splt = basefile.split('_')
-        if len(splt)==9:
-            mission,proc_level,date_n_time,proc_ver,r_orbit,tile,prod_disc,cc,aux = basefile.split('_')
-            ver,_ = aux.split('.')
+        if len(splt) == 9:
+            mission, proc_level, date_n_time, proc_ver, r_orbit, tile, prod_disc, cc, aux = basefile.split('_')
+            ver, _ = aux.split('.')
         else:
-            mission,proc_level,date_n_time,proc_ver,r_orbit,tile,aux = basefile.split('_')
-            prod_disc,_ = aux.split('.')
+            mission, proc_level, date_n_time, proc_ver, r_orbit, tile, aux = basefile.split('_')
+            prod_disc, _ = aux.split('.')
             cc, ver = ['NA', 'v20']
         file_event_date = datetime.strptime(date_n_time, '%Y%m%dT%H%M%S')
         yyyy = f"{file_event_date.year:02d}"
         mm = f"{file_event_date.month:02d}"
         dd = f"{file_event_date.day:02d}"
-        
+
         metadata['input_file'] = grs_file_entry
         metadata['basename'] = basefile
         metadata['mission'] = mission
@@ -619,11 +964,12 @@ class GRS:
         metadata['grs_ver'] = ver
 
         return metadata
-    
+
     @staticmethod
     def get_grs_dict(grs_nc_file, grs_version='v15'):
         """
-        Opens the GRS netCDF files using the xarray library and dask, returning a DataArray containing only the Rrs bands
+        Opens the GRS netCDF files using the xarray library and dask, returning a DataArray containing only the
+            Rrs bands
         Parameters
         ----------
         grs_nc_file: the path to the GRS file
@@ -645,18 +991,18 @@ class GRS:
                 variables_to_drop = [var for var in ds.variables if var not in variables_to_keep]
                 grs = ds.drop_vars(variables_to_drop)
         elif grs_version == 'v20':
-            ds = xr.open_dataset(grs_nc_file, chunks={'y': 610, 'x': 610}, engine="netcdf4")
+            ds = xr.open_dataset(grs_nc_file, chunks={'y': -1, 'x': -1}, engine="netcdf4")
             waves = ds['Rrs']['wl']
-            subset_dict = {band: ds['Rrs'].sel(wl=waves[i]).drop(['wl', 'x', 'y']) for i, band in enumerate(bands)}
+            subset_dict = {band: ds['Rrs'].sel(wl=waves[i]).drop(['wl']) for i, band in enumerate(bands)}
             grs = xr.Dataset(subset_dict)
         else:
             grs = None
         ds.close()
 
         return grs
-    
+
     def param2tiff(self, ndarray_data, img_ref, output_img, no_data=0, gdal_driver_name="GTiff"):
-        
+
         # Gather information from the template file
         ref_data = gdal.Open(img_ref)
         trans = ref_data.GetGeoTransform()
@@ -664,9 +1010,9 @@ class GRS:
         # nodatav = 0 #data.GetNoDataValue()
         # Create file using information from the template
         outdriver = gdal.GetDriverByName(gdal_driver_name)  # http://www.gdal.org/gdal_8h.html
-        
+
         [cols, rows] = ndarray_data.shape
-        
+
         print(f'Writing output .tiff')
         # GDT_Byte = 1, GDT_UInt16 = 2, GDT_UInt32 = 4, GDT_Int32 = 5, GDT_Float32 = 6,
         # options=['COMPRESS=PACKBITS'] -> https://gdal.org/drivers/raster/gtiff.html#creation-options
@@ -682,7 +1028,7 @@ class GRS:
 
         # Closing the files
         # https://gdal.org/tutorials/raster_api_tut.html#using-create
-        data = None
+        # data = None
         outdata = None
         self.log.info('')
         pass

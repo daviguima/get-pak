@@ -354,6 +354,7 @@ class Utils:
         """
         Function to search for the matchup dates of two sets of images given two sets of dates.
         This function also writes the directories of the matchups for each date
+
         Parameters
         ----------
         fst_dates: list of dates of the first set of images
@@ -379,6 +380,34 @@ class Utils:
                 dates.append(date)
 
         return matches, str_matches, dates
+
+    @staticmethod
+    def find_outliers_IQR(values):
+        """
+        Function to remove outliers, using the same methods as in boxplot (interquartile distance)
+
+        Parameters
+        ----------
+        values: numpy array with data
+
+        Returns
+        -------
+        outliers: a numpy array of the removed outliers
+        clean_array: a numpy array, with the same size, as values, without the outliers
+        """
+        aux = values[np.where(np.isnan(values) == False)]
+        clean_array = values
+        q1 = np.quantile(aux, 0.25)
+        q3 = np.quantile(aux, 0.75)
+        iqr = q3 - q1
+        # finding upper and lower whiskers
+        upper_bound = q3 + (1.5 * iqr)
+        lower_bound = q1 - (1.5 * iqr)
+        # array of outliers and decontaminated array
+        outliers = aux[(aux <= lower_bound) | (aux >= upper_bound)]
+        clean_array[(clean_array <= lower_bound) | (clean_array >= upper_bound)] = np.nan
+
+        return outliers, clean_array
 
 class DefaultDicts:
 
