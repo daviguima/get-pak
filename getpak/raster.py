@@ -71,6 +71,16 @@ class Raster:
             byte_content = fp.read()
         self.owts_B2_7 = dict(json.loads(byte_content))
 
+        means_owt = importlib_resources.files(__name__).joinpath('data/Means_OWT_Cordeiro_S2A_SPM.json')
+        with means_owt.open('rb') as fp:
+            byte_content = fp.read()
+        self.owts_spm_B1_8A = dict(json.loads(byte_content))
+
+        means_owt = importlib_resources.files(__name__).joinpath('data/Means_OWT_Cordeiro_S2A_SPM_B2-8A.json')
+        with means_owt.open('rb') as fp:
+            byte_content = fp.read()
+        self.owts_spm_B2_8A = dict(json.loads(byte_content))
+
         # raster
 
     @staticmethod
@@ -291,12 +301,13 @@ class Raster:
 
         return values_shp
 
-    def sam(self, rrs, single=False, mode='B1'):
+    def _sam(self, rrs, single=False, mode='B1'):
         """
         Spectral Angle Mapper for OWT classification for a set of pixels
         It calculates the angle between the Rrs of a set of pixels and those of the 13 OWT of inland waters
-        (Spyrakos et al., 2018)
-        Input values are the values of the pixels from B1 or B2 (depends on mode) to B7, the dict of the OWTs is already stored
+            (Spyrakos et al., 2018)
+        Input values are the values of the pixels from B1 or B2 (depends on mode) to B7, the dict of the OWTs is already
+            stored
         Returns the spectral angle between the Rrs of the pixels and each OWT
         To classify pixels individually, set single=True
         ----------
@@ -324,6 +335,28 @@ class Raster:
 
         return angles
 
+    def _euclid_dist(self, rrs_px, rrs_owt, mode='B1'):
+        """
+        Spectral Angle Mapper for OWT classification for a set of pixels
+        It calculates the angle between the Rrs of a set of pixels and those of the 13 OWT of inland waters
+            (Spyrakos et al., 2018)
+        Input values are the values of the pixels from B1 or B2 (depends on mode) to B7, the dict of the OWTs is already
+            stored
+        Returns the spectral angle between the Rrs of the pixels and each OWT
+        To classify pixels individually, set single=True
+        ----------
+        """
+        # normalising the pixel reflectance
+        nE = rrs_px / rrs_px.sum()
+
+        # normalising the OWT reflectance
+        nM = rrs_owt / rrs_owt.sum()
+
+        # Euclidean distance
+        angle = np.linalg.norm(nE - nM)
+
+        return angle
+
     def classify_owt_px(self, rrs_dict, B1=True):
         """
         Function to classify the OWT of each pixel
@@ -350,12 +383,12 @@ class Raster:
         # Drop the variables that won't be used in the classification
         variables_to_drop = [var for var in rrs_dict.variables if var not in bands + ['x', 'y']]
         rrs = rrs_dict.drop_vars(variables_to_drop)
-        # Find non-NaN values
-        nzero = np.where(~np.isnan(rrs[bands[-1]].values))
+        # Find non-NaN values across all bands
+        nzero = np.where(~np.any([np.isnan(rrs[var]) for var in bands], axis=0))
         # array of OWT class for each pixel
-        class_px = np.zeros_like(rrs[bands[-1]], dtype='uint8')
+        class_px = np.zeros_like(rrs[bands[0]], dtype='uint8')
         # array of angles to limit the loop
-        angles = np.zeros((len(nzero[0]), 13), dtype='float16')
+        angles = np.zeros((len(nzero[0]), len(self.owts_B1_7)), dtype='float16')
 
         # creating a new Band 1 by undoing the upsampling of GRS, keeping only the pixels entirely inside water
         if B1:
@@ -368,25 +401,93 @@ class Raster:
         for i in range(len(bands)):
             pix[:, i] = rrs[bands[i]].values[nzero]
         for i in range(len(nzero[0])):
-            angles[i, :] = self.sam(rrs=pix[i, :], mode=mode, single=True)
+            angles[i, :] = self._sam(rrs=pix[i, :], mode=mode, single=True)
 
         # if B1 is being used, there won't be any classification for the pixels without values in B1, so they have to be
         # classified using only bands 2 to 7
         if B1:
             nodata = np.where(np.isnan(angles[:, 0]))[0]
             for i in range(len(nodata)):
-                angles[nodata[i], :] = self.sam(rrs=pix[nodata[i], 1:], mode='B2', single=True)
-        class_px[nzero] = np.argmin(angles, axis=1) + 1
+                angles[nodata[i], :] = self._sam(rrs=pix[nodata[i], 1:], mode='B2', single=True)
+        class_px[nzero] = np.nanargmin(angles, axis=1) + 1
 
         return class_px, angles
 
-    def classify_owt(self, rasterio_rast, shapefiles, rrs_dict, B1=True, min_px=6):
+    def classify_owt_spm_px(self, rrs_dict, B1=True):
         """
-        Function to classify the the OWT of pixels inside a shapefile (or a set of shapefiles)
+        Function to classify the OWT of each pixel based on the SPM optical water classes (Codeiro, 2022)
+        It is based on the minimum Euclidean distance between the spectra of each pixel and the 4 classes
 
         Parameters
         ----------
-        rasterio_rast: a rasterio raster open with rasterio.open
+        rrs_dict: a xarray Dataset containing the Rrs bands
+        B1: boolean to whether or not use Band 1 when using Sentinel-2 data
+
+        Returns
+        -------
+        class_px: an array, with the same size as the input bands, with the pixels classified with the smallest
+        Euclidean distance
+        angles: a 2-dimensional array, where the first dimension is the number of valid pixels in the rrs_dict, and
+        the second dimension is the number of OWTs. The values are the Euclidean distances between the Rrs and the mean
+        Rrs of each OWT, in each pixel
+
+        """
+        if B1:
+            bands = ['Rrs_B1', 'Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7', 'Rrs_B8', 'Rrs_B8A']
+            mode = 'B1'
+        else:
+            bands = ['Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7', 'Rrs_B8', 'Rrs_B8A']
+            mode = 'B2'
+        # Drop the variables that won't be used in the classification
+        variables_to_drop = [var for var in rrs_dict.variables if var not in bands + ['x', 'y']]
+        rrs = rrs_dict.drop_vars(variables_to_drop)
+        # Find non-NaN values across all bands
+        nzero = np.where(~np.any([np.isnan(rrs[var]) for var in bands], axis=0))
+        # array of OWT class for each pixel
+        class_px = np.zeros_like(rrs[bands[0]], dtype='uint8')
+        # array of angles to limit the loop
+        angles = np.zeros((len(nzero[0]), len(self.owts_spm_B1_8A)), dtype='float16')
+
+        # creating a new Band 1 by undoing the upsampling of GRS, keeping only the pixels entirely inside water
+        if B1:
+            aux = rrs['Rrs_B1'].coarsen(x=3, y=3).mean(skipna=False).interp(x=rrs.x, y=rrs.y, method='nearest').values
+            rrs['Rrs_B160m'] = (('x', 'y'), aux)
+            bands = ['Rrs_B160m', 'Rrs_B2', 'Rrs_B3', 'Rrs_B4', 'Rrs_B5', 'Rrs_B6', 'Rrs_B7', 'Rrs_B8', 'Rrs_B8A']
+
+        # loop over each nonzero value in the rrs_dict
+        pix = np.zeros((len(nzero[0]), len(bands)))
+        for i in range(len(bands)):
+            pix[:, i] = rrs[bands[i]].values[nzero]
+        # array of values of the OWTs
+        if B1:
+            M = np.array([list(val.values()) for val in self.owts_spm_B1_8A.values()])
+        else:
+            M = np.array([list(val.values()) for val in self.owts_spm_B2_8A.values()])
+        for i in range(len(nzero[0])):
+            for j in range(len(M)):
+               # angles[i, j] = self._euclid_dist(pix[i, :], mode=mode)
+               angles[i, j] = np.linalg.norm(pix[i, :] - M[j])
+
+        # if B1 is being used, there won't be any classification for the pixels without values in B1, so they have to be
+        # classified using only bands 2 to 7
+        if B1:
+            nodata = np.where(np.isnan(angles[:, 0]))[0]
+            M = np.array([list(val.values()) for val in self.owts_spm_B2_8A.values()])
+            for i in range(len(nodata)):
+                for j in range(len(M)):
+                    # angles[nodata[i], j] = self._euclid_dist(pix[i, :], mode='B2')
+                    angles[nodata[i], j] = np.linalg.norm(pix[nodata[i], 1:] - M[j])
+        class_px[nzero] = np.nanargmin(angles, axis=1) + 1
+
+        return class_px, angles
+
+    def classify_owt_shp(self, rasterio_rast, shapefiles, rrs_dict, B1=True, min_px=9):
+        """
+        Function to classify the OWT of pixels inside a shapefile (or a set of shapefiles)
+
+        Parameters
+        ----------
+        rasterio_rast: a rasterio raster with the same configuration as the bands, open with rasterio.open
         shapefiles: a polygon (or set of polygons), usually of waterbodies to be classified, opened as geometry
             using fiona
         rrs_dict: a xarray Dataset containing the Rrs bands
@@ -412,7 +513,7 @@ class Raster:
             # Verifying if there are more pixels than the minimum
             valid_pixels = np.isnan(values[0]) == False
             if np.count_nonzero(valid_pixels) >= min_px:
-                angle = int(np.argmin(self.sam(values, mode=mode)) + 1)
+                angle = int(np.argmin(self._sam(values, mode=mode)) + 1)
             else:
                 angle = int(0)
 
@@ -425,12 +526,12 @@ class Raster:
 
         return class_spt.astype('uint8'), class_shp.astype('uint8')
 
-    def classify_owt_weights(self, class_px, angles, n=3, remove_cls_one=True):
+    def classify_owt_weights(self, class_px, angles, n=3, remove_classes=1):
         """
-        Function to attribute weights to the n-th most important OWTs, based on the squared cossine of SAM
+        Function to attribute weights to the n-th most important OWTs, based on the spectral angle mapper
         The weights are used for calculating weighted means of the water quality parameters, in order to smooth the
         spatial differences between the pixels, and also to remove possible outliers generated by some models
-        For more information on this approach, please refer to Moore et al. (2001) and Carrea et al. (2023)
+        For more information on this approach, please refer to Moore et al. (2001) and Liu et al. (2021)
 
         This function uses the results of classify_owt_px as input data
 
@@ -441,12 +542,12 @@ class Raster:
         the second dimension is the number of OWTs. The values are the spectral angles between the Rrs and the mean Rrs
         of each OWT, in each pixel
         n = the number of dominant classes to be used to generate the weights
-        remove_cls_one: logical, remove the pixels classified as OWT 1?
+        remove_classes: int or a list of OWT classes to be removed (pixel-wise)
 
         Returns
         -------
-        class_px: an array, with the same size as the input bands, with the pixels classified with the smallest SAM
-        angles
+        owt_classes: an array, with the same size as the input bands, with the n classes of pixels (first dimension)
+        owt_weights: an array, with the same size as the input bands, with the n weights (first dimension)
         """
         # creating the variables of weights and classes for each pixel, depending on the desired number of classes to
         # be used
@@ -457,19 +558,25 @@ class Raster:
         nzero = np.where(class_px != 0)
 
         # Create an array of indices
-        cos_sqrt = np.cos(angles) ** 2
-        indices = np.argsort(-cos_sqrt, axis=1)
-        weights = np.take_along_axis(cos_sqrt, indices[:, 0:n:], axis=1)
+        indices = np.argsort(angles, axis=1)
+        lowest_angles = np.take_along_axis(angles, indices[:,0:(n+1):], axis=1)
 
-        # Assigning values to the matrices
+        # Calculating the weights based on normalisation of the n+1 lowest spectral angles (parallel of convertion of
+        # units) and assigning values to the matrices
         for i in range(n):
-            owt_weights[i, nzero[0], nzero[1]] = weights[:, i]
             owt_classes[i, nzero[0], nzero[1]] = indices[:, i] + 1  # summing one due to positioning starting in 1
+            for j in range(nzero[0].shape[0]):
+                owt_weights[i, nzero[0][j], nzero[1][j]] = (lowest_angles[j, i] - lowest_angles[j, -1]) / (
+                            lowest_angles[j, 0] - lowest_angles[j, -1])
 
-        # removing OWT 1:
-        if remove_cls_one == True:
-            ones = np.where(indices[:, 0] == 0)[0]
+        # removing undesidered OWTs:
+        if isinstance(remove_classes, int):
+            ones = np.where(indices[:, 0] == (remove_classes-1))[0]
             owt_weights[:, nzero[0][ones], nzero[1][ones]] = np.nan
+        elif isinstance(remove_classes, list):
+            for i in range(len(remove_classes)):
+                ones = np.where(indices[:, 0] == (remove_classes[i]-1))[0]
+                owt_weights[:, nzero[0][ones], nzero[1][ones]] = np.nan
 
         # # removing the zeros to avoid division by 0
         # owt_weights[np.where(owt_weights == 0)] = np.nan
@@ -501,7 +608,7 @@ class Raster:
         classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
         index = np.where(np.isin(class_owt_spt, classes))
         if len(index[0] > 0):
-            cdom[index] = ifunc.functions['CDOM_Brezonik']['function'](Blue=rrs_dict['Rrs_B2'].values[index],
+            cdom[index] = ifunc.cdom_brezonik(Blue=rrs_dict['Rrs_B2'].values[index],
                                                                        RedEdg2=rrs_dict['Rrs_B6'].values[index])
 
         # removing espurious values
@@ -525,6 +632,7 @@ class Raster:
         ----------
         rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
         class_owt_spt: an array, with the same size as the input bands, with the OWT pixels
+        limits: boolean to choose whether to apply the algorithms only in their limits of cal/val
         alg: one the the following algorithms available: owt to use the methodology based on OWT, or gons
 
         Returns
@@ -544,7 +652,7 @@ class Raster:
             # classes = [1]
             # index = np.where(np.isin(class_owt_spt, classes))
             # if len(index[0] > 0):
-            #     chla[index] = ifunc.functions['CHL_Gurlin']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+            #     chla[index] = ifunc.chl_gurlin(Red=rrs_dict['Rrs_B4'].values[index],
             #                                                             RedEdg1=rrs_dict['Rrs_B5'].values[index],
             #                                                             a=86.09, b=-517.5, c=886.7)
             #     if limits:
@@ -556,7 +664,7 @@ class Raster:
             classes = [1, 6, 10]
             index = np.where(np.isin(class_owt_spt, classes))
             if len(index[0] > 0):
-                chla[index] = ifunc.functions['CHL_Gons']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                chla[index] = ifunc.chl_gons(Red=rrs_dict['Rrs_B4'].values[index],
                                                                       RedEdg1=rrs_dict['Rrs_B5'].values[index],
                                                                       RedEdg3=rrs_dict['Rrs_B7'].values[index],
                                                                       aw665=0.425, aw708=0.704)
@@ -566,10 +674,10 @@ class Raster:
                     chla[index[0][out], index[1][out]] = np.nan
                     self.out[index[0][out], index[1][out]] += 1
 
-            classes = [2, 4, 5, 12]
+            classes = [2, 4, 5, 11, 12]
             index = np.where(np.isin(class_owt_spt, classes))
             if len(index[0] > 0):
-                chla[index] = ifunc.functions['CHL_NDCI']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                chla[index] = ifunc.chl_ndci(Red=rrs_dict['Rrs_B4'].values[index],
                                                                            RedEdg1=rrs_dict['Rrs_B5'].values[index])
                 if limits:
                     lims = [5, 250]
@@ -582,7 +690,7 @@ class Raster:
             conditions = (np.isin(class_owt_spt, classes)) & (chla > 20)
             index = np.where(conditions)
             if len(index[0] > 0):
-                chla[index] = ifunc.functions['CHL_Gilerson2']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                chla[index] = ifunc.chl_gilerson2(Red=rrs_dict['Rrs_B4'].values[index],
                                                                       RedEdg1=rrs_dict['Rrs_B5'].values[index])
                 if limits:
                     lims = [5, 250]
@@ -590,10 +698,10 @@ class Raster:
                     chla[index[0][out], index[1][out]] = np.nan
                     self.out[index[0][out], index[1][out]] += 1
 
-            classes = [7, 8, 11]
+            classes = [7, 8]
             index = np.where(np.isin(class_owt_spt, classes))
             if len(index[0] > 0):
-                chla[index] = ifunc.functions['CHL_Gilerson2']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+                chla[index] = ifunc.chl_gilerson2(Red=rrs_dict['Rrs_B4'].values[index],
                                                                       RedEdg1=rrs_dict['Rrs_B5'].values[index])
                 if limits:
                     lims = [5, 250]
@@ -604,7 +712,7 @@ class Raster:
             # classes = []
             # index = np.where(np.isin(class_owt_spt, classes))
             # if len(index[0] > 0):
-            #     chla[index] = ifunc.functions['CHL_Gilerson3']['function'](Red=rrs_dict['Rrs_B4'].values[index],
+            #     chla[index] = ifunc.chl_gilerson3(Red=rrs_dict['Rrs_B4'].values[index],
             #                                                                RedEdg1=rrs_dict['Rrs_B5'].values[index],
             #                                                                RedEdg2=rrs_dict['Rrs_B6'].values[index])
             #     if limits:
@@ -616,9 +724,9 @@ class Raster:
             classes = [3]
             index = np.where(np.isin(class_owt_spt, classes))
             if len(index[0] > 0):
-                chla[index] = ifunc.functions['CHL_OC2']['function'](Blue=rrs_dict['Rrs_B2'].values[index],
-                                                                     Green=rrs_dict['Rrs_B3'].values[index],
-                                                                     a=0.1098, b=-0.755, c=-14.12, d=-117, e=-17.76)
+                chla[index] = ifunc.chl_OC2(Blue=rrs_dict['Rrs_B2'].values[index],
+                                            Green=rrs_dict['Rrs_B3'].values[index], a=0.1098, b=-0.755, c=-14.12,
+                                            d=-117, e=-17.76)
                 if limits:
                     lims = [0.01, 50]
                     out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
@@ -628,9 +736,9 @@ class Raster:
             classes = [9]
             index = np.where(np.isin(class_owt_spt, classes))
             if len(index[0] > 0):
-                chla[index] = ifunc.functions['CHL_OC2']['function'](Blue=rrs_dict['Rrs_B2'].values[index],
-                                                                     Green=rrs_dict['Rrs_B3'].values[index],
-                                                                     a=0.0536, b=7.308, c=116.2, d=412.4, e=463.5)
+                chla[index] = ifunc.chl_OC2(Blue=rrs_dict['Rrs_B2'].values[index],
+                                            Green=rrs_dict['Rrs_B3'].values[index], a=0.0536, b=7.308, c=116.2,
+                                            d=412.4, e=463.5)
                 if limits:
                     lims = [0.01, 50]
                     out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
@@ -640,18 +748,18 @@ class Raster:
             classes = [13]
             index = np.where(np.isin(class_owt_spt, classes))
             if len(index[0] > 0):
-                chla[index] = ifunc.functions['CHL_OC2']['function'](Blue=rrs_dict['Rrs_B2'].values[index],
-                                                                     Green=rrs_dict['Rrs_B3'].values[index],
-                                                                     a=-5020, b=2.9e+04, c=-6.1e+04, d=5.749e+04, e=-2.026e+04)
+                chla[index] = ifunc.chl_OC2(Blue=rrs_dict['Rrs_B2'].values[index],
+                                            Green=rrs_dict['Rrs_B3'].values[index], a=-5020, b=2.9e+04, c=-6.1e+04,
+                                            d=5.749e+04, e=-2.026e+04)
                 if limits:
                     lims = [0.01, 50]
                     out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
                     chla[index[0][out], index[1][out]] = np.nan
                     self.out[index[0][out], index[1][out]] += 1
+
         else:
-            chla = ifunc.functions['CHL_Gons']['function'](Red=rrs_dict['Rrs_B4'].values,
-                                                                      RedEdg1=rrs_dict['Rrs_B5'].values,
-                                                                      RedEdg3=rrs_dict['Rrs_B7'].values)
+            chla = ifunc.chl_gons(Red=rrs_dict['Rrs_B4'].values, RedEdg1=rrs_dict['Rrs_B5'].values,
+                                  RedEdg3=rrs_dict['Rrs_B7'].values)
             if limits:
                 lims = [1, 250]
                 out = np.where((chla < lims[0]) | (chla > lims[1]))
@@ -664,48 +772,8 @@ class Raster:
 
         return chla
 
-    def turbidity(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0, alg='Dogliotti'):
-        """
-        Function to calculate the turbidity (turb) based on the optical water type (OWT)
-        Parameters
-        ----------
-        rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
-        class_owt_spt: an array, with the same size as the input bands, with the OWT pixels
-        alg: one the the following algorithms available: Dogliotti or Conde
-
-        Returns
-        -------
-        turb: an array, with the same size as the input bands, with the modeled values
-        """
-        import getpak.inversion_functions as ifunc
-        turb = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='float32')
-
-        # create a matrix for the outliers
-        if not hasattr(self, 'out'):
-            self.out = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='uint8')
-
-        # turbidity functions for each OWT
-        classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
-        index = np.where(np.isin(class_owt_spt, classes))
-        if len(index[0] > 0):
-            if alg == 'Dogliotti':
-                turb[index] = ifunc.functions['TURB_Dogliotti_S2']['function'](Red=rrs_dict['Rrs_B4'].values[index],
-                                                                            Nir2=rrs_dict['Rrs_B8A'].values[index])
-            elif alg == 'Conde':
-                turb[index] = ifunc.functions['TURB_Conde']['function'](Red=rrs_dict['Rrs_B4'].values[index])
-
-        # removing espurious values and zeros
-        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
-            out = np.where((turb < lower_lim) | (turb > upper_lim))
-            turb[out] = np.nan
-            self.out[out] = 1
-
-        out = np.where((turb == 0) | np.isinf(turb))
-        turb[out] = np.nan
-
-        return turb
-
-    def spm(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0, alg='Hybrid'):
+    def spm(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0, alg='owt', limits=True, mode_Jiang=None,
+            rasterio_rast=None, shapefile=None, min_px=9):
         """
         Function to calculate the suspended particulate matter (SPM) based on the optical water type (OWT)
 
@@ -713,7 +781,16 @@ class Raster:
         ----------
         rrs_dict: rrs_dict: a xarray Dataset containing the Rrs bands
         class_owt_spt: an array, with the same size as the input bands, with the OWT pixels
-        alg: one the the following algorithms available: Hybrid or Nechad
+        alg: one of the following algorithms available: owt to use the methodology based on OWT, Hybrid, Nechad,
+            NechadGreen, Binding, Zhang, Dogliotti, Condé or different versions of Jiang
+        limits: boolean to choose whether to apply the algorithms only in their limits of cal/val
+        mode_Jiang: used only for the general Jiang algorithm, to choose from pixel-wise or lake-wise calculation
+        rasterio_rast: used only for the general Jiang algorithm, a rasterio raster with the same configuration as the
+            bands, open with rasterio.open
+        shapefile: used only for the general Jiang algorithm, a polygon (or set of polygons), usually of waterbodies to
+            be classified, opened as geometry using fiona
+        min_px: used only for the general Jiang algorithm, minimum number of pixels in each polygon to operate the
+            inversion
 
         Returns
         -------
@@ -727,16 +804,118 @@ class Raster:
             self.out = np.zeros(rrs_dict['Rrs_B4'].shape, dtype='uint8')
 
         # spm functions for each OWT
-        classes = [1, 4, 5, 6, 2, 7, 8, 11, 12, 3, 9, 10, 13]
+        classes = [1, 2, 3, 4]
         index = np.where(np.isin(class_owt_spt, classes))
         if len(index[0] > 0):
-            if alg == 'Hybrid':
-                spm[index] = ifunc.functions['SPM_S3']['function'](Red=rrs_dict['Rrs_B4'].values[index],
-                                                                   Nir2=rrs_dict['Rrs_B8A'].values[index])
-            elif alg == 'Nechad':
-                spm[index] = ifunc.functions['SPM_Nechad']['function'](Red=rrs_dict['Rrs_B4'].values[index])
+            if alg == 'owt':
+                classes = [1]
+                index = np.where(np.isin(class_owt_spt, classes))
+                if len(index[0] > 0):
+                    spm[index] = ifunc.spm_jiang2021_green(Aerosol=rrs_dict['Rrs_B1'].values[index],
+                                                           Blue=rrs_dict['Rrs_B2'].values[index],
+                                                           Green=rrs_dict['Rrs_B3'].values[index],
+                                                           Red=rrs_dict['Rrs_B4'].values[index])
+                    if limits:
+                        lims = [0, 50]
+                        out = np.where((spm[index] < lims[0]) | (spm[index] > lims[1]))
+                        spm[index[0][out], index[1][out]] = np.nan
+                        self.out[index[0][out], index[1][out]] += 1
 
-        # removing espurious values and zeros
+                classes = [2]
+                index = np.where(np.isin(class_owt_spt, classes))
+                if len(index[0] > 0):
+                    spm[index] = ifunc.spm_jiang2021_red(Aerosol=rrs_dict['Rrs_B1'].values[index],
+                                                         Blue=rrs_dict['Rrs_B2'].values[index],
+                                                         Green=rrs_dict['Rrs_B3'].values[index],
+                                                         Red=rrs_dict['Rrs_B4'].values[index])
+                    if limits:
+                        lims = [10, 500]
+                        out = np.where((spm[index] < lims[0]) | (spm[index] > lims[1]))
+                        spm[index[0][out], index[1][out]] = np.nan
+                        self.out[index[0][out], index[1][out]] += 1
+
+                classes = [3]
+                index = np.where(np.isin(class_owt_spt, classes))
+                if len(index[0] > 0):
+                    spm[index] = ifunc.spm_zhang2014(RedEdge1=rrs_dict['Rrs_B5'].values[index])
+
+                    if limits:
+                        lims = [20, 1000]
+                        out = np.where((spm[index] < lims[0]) | (spm[index] > lims[1]))
+                        spm[index[0][out], index[1][out]] = np.nan
+                        self.out[index[0][out], index[1][out]] += 1
+
+                classes = [4]
+                index = np.where(np.isin(class_owt_spt, classes))
+                if len(index[0] > 0):
+                    spm[index] = ifunc.spm_binding2010(RedEdge2=rrs_dict['Rrs_B6'].values[index])
+
+                    if limits:
+                        lims = [50, 2000]
+                        out = np.where((spm[index] < lims[0]) | (spm[index] > lims[1]))
+                        spm[index[0][out], index[1][out]] = np.nan
+                        self.out[index[0][out], index[1][out]] += 1
+
+            elif alg == 'Hybrid':
+                spm[index] = ifunc.spm_s3(Red=rrs_dict['Rrs_B4'].values[index],
+                                          Nir2=rrs_dict['Rrs_B8A'].values[index])
+            elif alg == 'Nechad':
+                spm[index] = ifunc.spm_nechad(Red=rrs_dict['Rrs_B4'].values[index])
+
+            elif alg == 'NechadGreen':
+                spm[index] = ifunc.spm_nechad(Red=rrs_dict['Rrs_B3'].values[index], a=228.72, c=0.2200)
+
+            elif alg == 'Binding':
+                spm[index] = ifunc.spm_binding2010(RedEdge2=rrs_dict['Rrs_B6'].values[index])
+
+            elif alg == 'Zhang':
+                spm[index] = ifunc.spm_zhang2014(RedEdge1=rrs_dict['Rrs_B5'].values[index])
+
+            elif alg == 'Jiang_Green':
+                spm[index] = ifunc.spm_jiang2021_green(Aerosol=rrs_dict['Rrs_B1'].values[index],
+                                                       Blue=rrs_dict['Rrs_B2'].values[index],
+                                                       Green=rrs_dict['Rrs_B3'].values[index],
+                                                       Red=rrs_dict['Rrs_B4'].values[index])
+
+            elif alg == 'Jiang_Red':
+                spm[index] = ifunc.spm_jiang2021_red(Aerosol=rrs_dict['Rrs_B1'].values[index],
+                                                     Blue=rrs_dict['Rrs_B2'].values[index],
+                                                     Green=rrs_dict['Rrs_B3'].values[index],
+                                                     Red=rrs_dict['Rrs_B4'].values[index])
+            elif alg == 'Dogliotti':
+                spm[index] = ifunc.spm_dogliotti_S2(Red=rrs_dict['Rrs_B4'].values[index],
+                                                     Nir2=rrs_dict['Rrs_B8A'].values[index])
+            elif alg == 'Conde':
+                spm[index] = ifunc.spm_conde(Red=rrs_dict['Rrs_B4'].values[index])
+
+            elif alg == 'Jiang':
+                if mode_Jiang == 'pixel':
+                    spm[index] = ifunc.spm_jiang2021(Aerosol=rrs_dict['Rrs_B1'].values[index],
+                                                     Blue=rrs_dict['Rrs_B2'].values[index],
+                                                     Green=rrs_dict['Rrs_B3'].values[index],
+                                                     Red=rrs_dict['Rrs_B4'].values[index],
+                                                     RedEdge2=rrs_dict['Rrs_B6'].values[index],
+                                                     Nir2=rrs_dict['Rrs_B8A'].values[index], mode=mode)
+                elif mode_Jiang == 'polygon':
+                    for i, shape in enumerate(shapefile):
+                        values, slices, mask = self.extract_px(rasterio_rast=rasterio_rast, shapefile=shape,
+                                                               rrs_dict=rrs_dict, bands=['Rrs_B1','Rrs_B2','Rrs_B3',
+                                                                                         'Rrs_B4','Rrs_B6','Rrs_B8A'])
+                        # Verifying if there are more pixels than the minimum
+                        valid_pixels = np.isnan(values[0]) == False
+                        if np.count_nonzero(valid_pixels) >= min_px:
+                            out = ifunc.spm_jiang2021(Aerosol=values[0].reshape(mask.shape),
+                                                      Blue=values[1].reshape(mask.shape),
+                                                      Green=values[2].reshape(mask.shape),
+                                                      Red=values[3].reshape(mask.shape),
+                                                      RedEdge2=values[4].reshape(mask.shape),
+                                                      Nir2=values[5].reshape(mask.shape), mode=mode).flatten()
+                            # classifying only the valid pixels inside the polygon
+                            values = np.where(valid_pixels, out, 0)
+                            # adding to avoid replacing values of cropping by other polygons
+                            spm[slices[0], slices[1]] += values.reshape(mask.shape)
+
+        # removing spurious values and zeros
         if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
             out = np.where((spm < lower_lim) | (spm > upper_lim))
             spm[out] = np.nan
