@@ -382,6 +382,18 @@ class Utils:
 
 class DefaultDicts:
 
+    grs_v20nc_s2bands = {'Rrs_B1': 443,
+                        'Rrs_B2': 490,
+                        'Rrs_B3': 560,
+                        'Rrs_B4': 665,
+                        'Rrs_B5': 705,
+                        'Rrs_B6': 740,
+                        'Rrs_B7': 783,
+                        'Rrs_B8': 842,
+                        'Rrs_B8A': 865,
+                        'Rrs_B11': 1610,
+                        'Rrs_B12': 2190}
+
     clustering_methods = {'M0': ['Oa17_reflectance:float', 'Oa21_reflectance:float'],
                           'M1': ['Oa17_reflectance:float', 'T865:float', 'A865:float'],
                           'M2': ['Oa21_reflectance:float', 'T865:float', 'A865:float'],
