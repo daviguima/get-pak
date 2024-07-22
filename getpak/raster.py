@@ -1,14 +1,13 @@
 import os
 import json
-from osgeo import gdal
 import numpy as np
+import xarray as xr
 import rasterio
 import rasterio.mask
-# import scipy.ndimage
 import importlib_resources
-import xarray as xr
-# from dask.distributed import Client
 
+from osgeo import gdal
+from pathlib import Path
 from datetime import datetime
 from rasterstats import zonal_stats
 from rasterio.warp import calculate_default_transform, reproject, Resampling
@@ -27,9 +26,13 @@ class Raster:
 
     array2tiff_gdal(ndarray_data, str_output_file, transform, projection, no_data=-1, compression='COMPRESS=PACKBITS')
         Given an input ndarray and the desired projection parameters, create a raster.tif using GDT_Float32.
-    
+
     reproj(in_raster, out_raster, target_crs='EPSG:4326')
         Given an input raster.tif reproject it to reprojected.tif using @target_crs
+
+    s2proj_ref_builder(wd_image_tif)
+        Given an input WD output water_mask.tif over the desires Sentinel-2 tile-grid system (ex: 20LLQ),
+        output the GDAL transformation, projection, rows and columns of the input image.        
 
     shp_stats(tif_file, shp_poly, keep_spatial=True, statistics='count min mean max median std')
         Given a single-band GeoTIFF file and a vector.shp return statistics inside the polygon.
@@ -193,6 +196,31 @@ class Raster:
         print(f'Done: {out_raster}')
         pass
 
+    @staticmethod
+    def s2proj_ref_builder(img_path_str):
+        '''
+        Given a WaterDetect output .tif image
+        return GDAL information metadata
+        '''
+        img_parent_name = os.path.basename(Path(img_path_str).parents[1])
+        sliced_ipn = img_parent_name.split('_') 
+        tile_id = sliced_ipn[5][1:]
+        # Get GDAL information from the template file
+        ref_data = gdal.Open(img_path_str)
+        mtx = ref_data.ReadAsArray()
+        trans = ref_data.GetGeoTransform()
+        proj = ref_data.GetProjection()
+        rows, cols = mtx.shape # return Y / X
+        ref = {
+            'trans': trans,
+            'proj': proj,
+            'rows': rows,
+            'cols': cols
+        }
+        #close GDAL image
+        del ref_data
+        return tile_id, ref
+    
     @staticmethod
     def shp_stats(tif_file, shp_poly, keep_spatial=False, statistics='count min mean max median std'):
         """
