@@ -48,7 +48,6 @@ class Utils:
 
     @staticmethod
     def create_log_handler(fname):
-        # based in this answer:
         # https://stackoverflow.com/questions/62835466/create-a-separate-logger-for-each-process-when-using-concurrent-futures-processp
         logger = logging.getLogger(name=fname)
         logger.setLevel(logging.INFO)
@@ -57,7 +56,7 @@ class Utils:
         fileHandler.setLevel(logging.INFO)
 
         logger.addHandler(fileHandler)
-        # logger.addHandler(logging.StreamHandler())
+        logger.addHandler(logging.StreamHandler())
 
         formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%d/%m/%Y %H:%M:%S')
 
