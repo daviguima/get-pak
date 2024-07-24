@@ -739,7 +739,7 @@ class Raster:
                 chla[index] = ifunc.chl_gilerson2(Red=rrs_dict['Rrs_B4'].values[index],
                                                                       RedEdg1=rrs_dict['Rrs_B5'].values[index])
                 if limits:
-                    lims = [5, 250]
+                    lims = [5, 500]
                     out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
                     chla[index[0][out], index[1][out]] = np.nan
                     self.out[index[0][out], index[1][out]] += 1
@@ -750,7 +750,7 @@ class Raster:
                 chla[index] = ifunc.chl_gilerson2(Red=rrs_dict['Rrs_B4'].values[index],
                                                                       RedEdg1=rrs_dict['Rrs_B5'].values[index])
                 if limits:
-                    lims = [5, 250]
+                    lims = [5, 500]
                     out = np.where((chla[index] < lims[0]) | (chla[index] > lims[1]))
                     chla[index[0][out], index[1][out]] = np.nan
                     self.out[index[0][out], index[1][out]] += 1
@@ -818,8 +818,8 @@ class Raster:
 
         return chla
 
-    def spm(self, rrs_dict, class_owt_spt, upper_lim=5000, lower_lim=0, alg='owt', limits=True, mode_Jiang=None,
-            rasterio_rast=None, shapefile=None, min_px=9):
+    def spm(self, rrs_dict, class_owt_spt, alg='owt', limits=True, mode_Jiang=None, rasterio_rast=None, shapefile=None,
+            min_px=9):
         """
         Function to calculate the suspended particulate matter (SPM) based on the optical water type (OWT)
 
@@ -961,14 +961,10 @@ class Raster:
                             # adding to avoid replacing values of cropping by other polygons
                             spm[slices[0], slices[1]] += values.reshape(mask.shape)
 
-        # removing spurious values and zeros
-        if isinstance(upper_lim, (int, float)) and isinstance(lower_lim, (int, float)):
-            out = np.where((spm < lower_lim) | (spm > upper_lim))
-            spm[out] = np.nan
-            self.out[out] = 1
-
+        # removing espurious values and zeros
         out = np.where((spm == 0) | np.isinf(spm))
         spm[out] = np.nan
+        self.out[out] = 1
 
         return spm
 
