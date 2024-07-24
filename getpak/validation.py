@@ -10,8 +10,8 @@ from sklearn.metrics import mean_absolute_percentage_error
 class Validation:
     
     def __init__(self, parent_log=None):
-            if parent_log:
-                self.log = parent_log
+        if parent_log:
+            self.log = parent_log
 
     @staticmethod
     def r2(y_true, y_pred): #1
