@@ -123,10 +123,11 @@ class Utils:
     @staticmethod
     def depth(somelist): return isinstance(somelist, list) and max(map(Utils.depth, somelist)) + 1
 
-    def get_available_cores(self):
+    @staticmethod
+    def get_available_cores():
         cpu_count = os.cpu_count() - 1
         if cpu_count <= 0:
-            self.log.info(f'Invalid number of CPU cores available: {os.cpu_count()}.')
+            print(f'Invalid number of CPU cores available: {os.cpu_count()}.')
             sys.exit(1)
         elif cpu_count > 61:
             cpu_count = 61

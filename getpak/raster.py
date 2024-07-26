@@ -1613,8 +1613,8 @@ class ParallelBandExtract:
             self.log = parent_log
 
     def _get_band_in_nc(self, file_n_band, rr, cc):
-
-        print(f'{os.getpid()} | Extracting band: {file_n_band[1]} from file: {file_n_band[0]}.\n')
+        
+        print(f'{file_n_band[1]} done... ', end='')
         # logging.info(f'{os.getpid()} | Extracting band: {file_n_band[1]} from file: {file_n_band[0]}.\n')
         # self.log.info(f'{os.getpid()} | Extracting band: {file_n_band[1]} from file: {file_n_band[0]}.\n')
         result = {}
@@ -1656,7 +1656,7 @@ class ParallelBandExtract:
                     [cc] * len(wfr_files_p)
                 ))
             except concurrent.futures.process.BrokenProcessPool as ex:
-                self.log.info(f"{ex} This might be caused by limited system resources. "
+                print(f"{ex} This might be caused by limited system resources. "
                               f"Try increasing system memory or disable concurrent processing. ")
 
         # For every returned dict inside the list, grab only the Key and append it at the final DF
