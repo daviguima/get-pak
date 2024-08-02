@@ -1,4 +1,5 @@
 gdal
+dask
 fiona
 matplotlib
 netcdf4
