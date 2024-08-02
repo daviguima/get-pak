@@ -4,5 +4,6 @@ netcdf4
 numpy
 pandas
 rasterio
+geopandas
 rasterstats
 scikit_learn
