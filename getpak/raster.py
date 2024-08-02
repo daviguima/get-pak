@@ -1614,7 +1614,7 @@ class ParallelBandExtract:
 
     def _get_band_in_nc(self, file_n_band, rr, cc):
         
-        print(f'{file_n_band[1]} done... ', end='')
+        print(u"\u2588", end='')
         # logging.info(f'{os.getpid()} | Extracting band: {file_n_band[1]} from file: {file_n_band[0]}.\n')
         # self.log.info(f'{os.getpid()} | Extracting band: {file_n_band[1]} from file: {file_n_band[0]}.\n')
         result = {}
@@ -1650,11 +1650,13 @@ class ParallelBandExtract:
         # Populate the initial DF with the output from the other bands
         with concurrent.futures.ProcessPoolExecutor(max_workers=cores) as executor:
             try:
+                print(u.repeat_to_length('_', len(wfr_files_p)))
                 list_of_bands = list(executor.map(
                     self._get_band_in_nc, wfr_files_p,
                     [rr] * len(wfr_files_p),
                     [cc] * len(wfr_files_p)
                 ))
+                print(' Done.')
             except concurrent.futures.process.BrokenProcessPool as ex:
                 print(f"{ex} This might be caused by limited system resources. "
                               f"Try increasing system memory or disable concurrent processing. ")
