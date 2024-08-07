@@ -98,7 +98,7 @@ class Validation:
         res['RMSE'] = round(self.rmse(y_true, y_pred), 2)
         res['RRMSE'] = round(self.rrmse(y_true, y_pred), 2)
         res['NRMSE'] = round(self.nrmse(y_true, y_pred), 2)
-        res['RMSLE'] = round(self.rmsle(y_true, y_pred), 2)
+        #res['RMSLE'] = round(self.rmsle(y_true, y_pred), 2)
         res['Spearman'] = round(self.corr(y_true, y_pred), 2)  # default m = spearman
         res['Pearson'] = round(self.corr(y_true, y_pred, m='pearson'), 2)
         res['Kendall'] = round(self.corr(y_true, y_pred, m='kendall'), 2)

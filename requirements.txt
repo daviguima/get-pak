@@ -10,3 +10,4 @@ geopandas
 rasterstats
 scikit-learn
 xarray
+rioxarray
