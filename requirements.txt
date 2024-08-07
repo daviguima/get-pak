@@ -11,4 +11,5 @@ rasterstats
 scikit-learn
 xarray
 rioxarray
+scikit-image
 importlib-resources
