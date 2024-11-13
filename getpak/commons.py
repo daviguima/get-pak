@@ -5,6 +5,7 @@ import json
 import logging
 import zipfile
 import subprocess
+import shutil
 import numpy as np
 import fnmatch
 from pathlib import Path
@@ -36,9 +37,9 @@ class Utils:
      ;-.-'|    \   |     88            88aaaaa          88        8b,dPPYba,  ,adPPYYba, 88   ,d8
     /   | \    _\  _\    88      88888 88"""""          88 aaaaaa 88P'    "8a ""     `Y8 88 ,a8"
     \__/'._;.  ==' ==\   Y8,        88 88               88 """""" 88       d8 ,adPPPPP88 8888[
-             \    \   |   Y8a.    .a88 88               88        88b,   ,a8" 88,    ,88 88`"Yba,
-             /    /   /    `"Y88888P"  88888888888      88        88`YbbdP"'  `"8bbdP"Y8 88   `Y8a
-             /-._/-._/                                            88
+    /|\  /|\ \    \   |   Y8a.    .a88 88               88        88b,   ,a8" 88,    ,88 88`"Yba,
+   / | \/ | \/    /   /    `"Y88888P"  88888888888      88        88`YbbdP"'  `"8bbdP"Y8 88   `Y8a
+  /  | || |  /-._/-._/                                            88
              \   `\  \                                            88
               `-._/._/
                         ''')
@@ -47,7 +48,6 @@ class Utils:
 
     @staticmethod
     def create_log_handler(fname):
-        # based in this answer:
         # https://stackoverflow.com/questions/62835466/create-a-separate-logger-for-each-process-when-using-concurrent-futures-processp
         logger = logging.getLogger(name=fname)
         logger.setLevel(logging.INFO)
@@ -56,7 +56,7 @@ class Utils:
         fileHandler.setLevel(logging.INFO)
 
         logger.addHandler(fileHandler)
-        # logger.addHandler(logging.StreamHandler())
+        logger.addHandler(logging.StreamHandler())
 
         formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%d/%m/%Y %H:%M:%S')
 
@@ -123,10 +123,11 @@ class Utils:
     @staticmethod
     def depth(somelist): return isinstance(somelist, list) and max(map(Utils.depth, somelist)) + 1
 
-    def get_available_cores(self):
+    @staticmethod
+    def get_available_cores():
         cpu_count = os.cpu_count() - 1
         if cpu_count <= 0:
-            self.log.info(f'Invalid number of CPU cores available: {os.cpu_count()}.')
+            print(f'Invalid number of CPU cores available: {os.cpu_count()}.')
             sys.exit(1)
         elif cpu_count > 61:
             cpu_count = 61
@@ -379,6 +380,100 @@ class Utils:
                 dates.append(date)
 
         return matches, str_matches, dates
+
+    def rename_waterdetect_masks(self, input_folder, output_folder):
+        """
+        Function to find all waterdetect water masks in a folder, get their dates, and copy only the water masks to a
+        # new folder with a new name. This function also writes the path of the water masks for each date
+
+        Parameters
+        ----------
+        input_folder: folder where the waterdetect masks are
+        output_folder
+
+        Returns
+        -------
+        wd_dates: list of dates of the water masks
+        wd_masks_list: list of the path to water masks
+        """
+        from pathlib import Path
+        import shutil
+        wd_dates, wd_masks_list = [], []
+        for root, dirs, files in os.walk(input_folder, topdown=False):
+            for name in files:
+                if name.endswith('.tif') and '_water_mask' in name:
+                    f = Path(os.path.join(root, name))
+                    newname = f.parent.parent.name + '_water_mask.tif'
+                    dest_plus_name = os.path.join(output_folder, newname)
+                    # copying to new folder
+                    shutil.copyfile(f, dest_plus_name)
+                    # print(f'COPYING: {f} TO: {dest_plus_name}\n')
+                    # appending the date and path
+                    nome = f.parent.parent.name.split(
+                        '_')  # check because for MAJA the dates are in position 2, while for other products it is 3
+                    date = nome[1][0:8] if nome[1][0] == '2' else nome[2][0:8]
+                    wd_dates.append(date)
+                    wd_masks_list.append(Path(dest_plus_name))
+
+        print(f'Copied {len(wd_masks_list)} water masks to: {output_folder}\n')
+
+        return wd_dates, wd_masks_list
+
+    def list_waterdetect_masks(self, input_folder):
+        """
+        This function finds all renamed waterdetect water masks (from function rename_waterdetect_masks) in a folder,
+        getting their dates and paths
+
+        Parameters
+        ----------
+        input_folder: folder where the waterdetect masks are
+
+        Returns
+        -------
+        wd_dates: list of dates of the water masks
+        wd_masks_list: list of the path to water masks
+        """
+        from pathlib import Path
+        wd_dates, wd_masks_list = [], []
+        for file in os.listdir(input_folder):
+            if file.endswith('.tif'):
+                f = Path(os.path.join(input_folder, file))
+                # appending the date and path
+                nome = file.split(
+                    '_')  # check because for MAJA the dates are in position 2, while for other products it is 3
+                date = nome[1][0:8] if nome[1][0] == '2' else nome[2][0:8]
+                wd_dates.append(date)
+                wd_masks_list.append(f)
+
+        return wd_dates, wd_masks_list
+
+    @staticmethod
+    def find_outliers_IQR(values):
+        """
+        Function to remove outliers, using the same methods as in boxplot (interquartile distance)
+
+        Parameters
+        ----------
+        values: numpy array with data
+
+        Returns
+        -------
+        outliers: a numpy array of the removed outliers
+        clean_array: a numpy array, with the same size, as values, without the outliers
+        """
+        aux = values[np.where(np.isnan(values) == False)]
+        clean_array = values
+        q1 = np.quantile(aux, 0.25)
+        q3 = np.quantile(aux, 0.75)
+        iqr = q3 - q1
+        # finding upper and lower whiskers
+        upper_bound = q3 + (1.5 * iqr)
+        lower_bound = q1 - (1.5 * iqr)
+        # array of outliers and decontaminated array
+        outliers = aux[(aux <= lower_bound) | (aux >= upper_bound)]
+        clean_array[(clean_array <= lower_bound) | (clean_array >= upper_bound)] = np.nan
+
+        return outliers, clean_array
 
 class DefaultDicts:
 
